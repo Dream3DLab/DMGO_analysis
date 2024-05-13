@@ -1,0 +1,582 @@
+---
+title: "liu & jessa to whole BRO-t1"
+author: "riri"
+date: "2023-08-16"
+output: html_document
+editor_options:
+  chunk_output_type: inline
+params:
+  wd: NULL
+  assets: NULL
+  prefix: NULL
+---
+
+```{r load_libraries, cache = FALSE, message = FALSE, warning = FALSE}
+
+# libraries from CRAN
+library(readr)
+library(kableExtra)
+library(ggplot2)
+library(Seurat)
+library(dittoSeq)
+library(SCpubr)
+
+# custom functions
+setwd(params$wd)
+```
+
+```{r setup}
+
+knitr::opts_chunk$set(
+  # Display PNG in HTML file, but also keep PDF outputs in figures folder
+  dev = c("png", "pdf"), 
+  # Keep all the figures produced in a chunk
+  fig.keep = "all",      
+  # Save all figures to this output folder
+  fig.path = file.path(params$wd,'figures/'),
+  # Do not cache results
+  cache = FALSE)
+
+# don't use dingbats in PDFs, in order to create Illustrator-friendly figures
+grDevices::pdf.options(useDingbats = FALSE)
+
+```
+
+```{r read in config file}
+
+config <- read_delim(file.path(params$assets,'projections.config.tsv'), delim = '\t', escape_double = FALSE, trim_ws = TRUE)
+refs <- read_delim(file.path(params$assets,'references.tsv'), delim = '\t', escape_double = FALSE, trim_ws = TRUE)
+
+# coerce to a list of param:value pairs, and make sure numeric parameters are numeric type
+config <- as.list(tibble::deframe(config[, c(1, 2)]))
+refs <- as.list(tibble::deframe(refs[,c(1,2)]))
+
+# automatically convert each config element to the right type
+config <- lapply(config, type.convert, as.is = TRUE)
+refs <- lapply(refs, type.convert, as.is = TRUE)
+
+config %>% 
+  unlist() %>%
+  kbl(escape = FALSE) %>%
+  kable_styling(position = "center")
+
+refs %>% 
+  unlist() %>%
+  kbl(escape = FALSE) %>%
+  kable_styling(position = "center")
+```
+
+```{r setup_dir}
+# print current working directory
+print(getwd())
+
+# specify and create output and figures folders with run prefix
+output_dir <- paste0(params$prefix,'_output')
+if (dir.exists(file.path(params$wd,output_dir))) {
+  cat("output dir already exists, overwriting data")
+} else {
+  cat("output dir does not yet exists, creating dir at\n", file.path(params$wd,output_dir))
+  dir.create(file.path(params$wd,output_dir), showWarnings = FALSE, recursive = TRUE)
+}
+
+figures_dir <- paste0(params$prefix,'_figures')
+if (dir.exists(file.path(params$wd,figures_dir))) {
+  cat("figures dir already exists, overwriting data")
+} else {
+  cat("figures dir does not yet exists, creating dir at\n", file.path(params$wd,figures_dir))
+  dir.create(file.path(params$wd,figures_dir), showWarnings = FALSE, recursive = TRUE)
+}
+```
+
+```{r read in query and assign malignancy, fig.height=10, fig.width=10}
+query <- readRDS(config$rds_dir)
+
+plasmids <- WhichCells(query, expression = EGFP|H3.3K27M|DNp53|Pdgfra.D842V|Luciferase > 0)
+query$tumor.plasmids <- ifelse(colnames(query) %in% plasmids, yes = "Plasmids detected", no = "No plasmids detected")
+query <- SetIdent(query, value = "tumor.plasmids")
+
+query_malignant <- subset(query, idents = "Plasmids detected")
+```
+
+
+```{r read refs}
+Jessa <- readRDS(file = refs$`Jessa et al. 2022`)
+Jessa$author <- "Jessa"
+
+Jessa <- SetIdent(Jessa, value = "Malignant_normal_consensus_Jessa2022")
+Jessa$annotation <- Jessa$Cell_type_consensus_Jessa2022
+Jessa_malignant<- subset(Jessa, idents = "Malignant")
+
+Jessa_malignant<- SetIdent(Jessa_malignant, value = "Cell_type_consensus_Jessa2022")
+Jessa_malignant<- subset(Jessa_malignant, idents = c("OPC", "Ependymal",
+                                          "Astrocytes","Oligodendrocytes",
+                                          "Glial progenitors", "Proliferating OPC",
+                                          "Neurons", "RGC", 
+                                          "Neuronal progenitors"))
+
+Jessa <- SetIdent(Jessa, value = "Cell_type_consensus_Jessa2022")
+Jessa <- subset(Jessa, idents = "Uncertain", invert = TRUE)
+
+Liu <- readRDS(file = refs$`Liu et al. 2022`)
+Liu$author <- "Liu"
+
+Liu_cancer <- c('OPC-like-2','OC-like','AC-like','OPC-like-3','OPC-like-1','MES-like','G2M', 'S')
+
+Liu$malignant <- ifelse(Liu$annotation %in% Liu_cancer, yes = 'Malignant', no = 'Normal')
+Liu <- SetIdent(Liu, value = "malignant")
+Liu_malignant <- subset(Liu, idents = "Malignant")
+
+Liu_malignant$annotation[Liu_malignant$annotation == 'G2M'] <- "Cycling"
+Liu_malignant$annotation[Liu_malignant$annotation == 'S'] <- "Cycling"
+Liu_malignant$annotation[Liu_malignant$annotation == 'OPC-like-1'] <- "OPC-like"
+Liu_malignant$annotation[Liu_malignant$annotation == 'OPC-like-2'] <- "OPC-like"
+Liu_malignant$annotation[Liu_malignant$annotation == 'OPC-like-3'] <- "OPC-like"
+
+Ramos <- readRDS(file = refs$`Ramos et al. 2022`)
+Ramos$author <- "Ramos"
+Ramos$annotation <- Ramos$celltypes
+
+RaLi <- merge(x = Ramos, y = Liu_malignant, add.cell.ids = c("Ramos","Liu"), project = "Reference", merge.data = F)
+
+Jessa <- Jessa %>%
+  FindVariableFeatures() %>%
+  ScaleData() %>%
+  RunPCA()
+gc()
+  
+Jessa_malignant<- Jessa_malignant %>%
+  FindVariableFeatures() %>%
+  ScaleData() %>%
+  RunPCA()
+gc()
+
+Liu_malignant <- Liu_malignant %>%
+  FindVariableFeatures() %>%
+  ScaleData() %>%
+  RunPCA()
+gc()
+
+RaLi <- RaLi %>% 
+  NormalizeData() %>%
+  FindVariableFeatures() %>%
+  ScaleData() %>%
+  RunPCA() 
+gc()
+
+Jessa_malignant
+Liu_malignant
+RaLi
+```
+
+```{r UMAP_Jessa}
+
+Jessa <- RunUMAP(Jessa,
+                            dims = 1:config$dims_use, 
+                            reduction = 'pca', 
+                            reduction.name = 'returnUMAP', 
+                            reduction.key = 'returnUMAP_',  
+                            return.model = TRUE)
+
+umap <- Jessa@reductions$returnUMAP
+
+umap@cell.embeddings <- Jessa@reductions$umap@cell.embeddings
+umap@misc$model$embedding <- Jessa@reductions$umap@cell.embeddings
+
+Jessa@reductions$returnUMAP <- CreateDimReducObject(embeddings = Jessa@reductions$umap@cell.embeddings, 
+                                                        assay = "RNA", 
+                                                        global = TRUE, 
+                                                        key = 'returnUMAP_',
+                                                        misc = umap@misc)
+
+## run same for the malignant subset
+Jessa_malignant <- RunUMAP(Jessa_malignant,
+                            dims = 1:config$dims_use, 
+                            reduction = 'pca', 
+                            reduction.name = 'returnUMAP', 
+                            reduction.key = 'returnUMAP_',  
+                            return.model = TRUE)
+
+umap <- Jessa_malignant@reductions$returnUMAP
+
+umap@cell.embeddings <- Jessa_malignant@reductions$umap@cell.embeddings
+umap@misc$model$embedding <- Jessa_malignant@reductions$umap@cell.embeddings
+
+Jessa_malignant@reductions$returnUMAP <- CreateDimReducObject(embeddings = Jessa_malignant@reductions$umap@cell.embeddings, 
+                                                        assay = "RNA", 
+                                                        global = TRUE, 
+                                                        key = 'returnUMAP_',
+                                                        misc = umap@misc)
+
+```
+
+```{r UMAP_Liu}
+
+Liu_malignant <- RunUMAP(Liu_malignant, 
+                            dims = 1:config$dims_use, 
+                            reduction = 'pca', 
+                            reduction.name = 'returnUMAP', 
+                            reduction.key = 'returnUMAP_',  
+                            return.model = TRUE)
+
+umap <- Liu_malignant@reductions$returnUMAP
+
+umap@cell.embeddings <- Liu_malignant@reductions$umap@cell.embeddings
+umap@misc$model$embedding <- Liu_malignant@reductions$umap@cell.embeddings
+
+Liu_malignant@reductions$returnUMAP <- CreateDimReducObject(embeddings = Liu_malignant@reductions$umap@cell.embeddings, 
+                                                        assay = "RNA", 
+                                                        global = TRUE, 
+                                                        key = 'returnUMAP_',
+                                                        misc = umap@misc)
+
+```
+
+```{r UMAP_RaLi}
+
+RaLi <- RunUMAP(RaLi, 
+                dims = 1:config$dims_use, 
+                reduction = 'pca', 
+                reduction.name = 'returnUMAP', 
+                reduction.key = 'returnUMAP_',  
+                return.model = TRUE)
+
+gc()
+```
+
+```{r find_and_transfer_Jessa}
+
+anchors <- FindTransferAnchors(reference = Jessa,
+                                      query = query,
+                                      dims = 1:config$dims_use,
+                                      reference.reduction = config$reference_reduction,
+                                      normalization.method = 'LogNormalize',
+                                      features = rownames(Jessa_malignant[["RNA"]]))
+
+query <- MapQuery(anchorset = anchors,
+                      reference = Jessa,
+                      query = query,
+                      refdata = list(Malignant    = 'Malignant_normal_consensus_Jessa2022',
+                                     id           = "annotation"),
+                      reference.reduction = config$reference_reduction,
+                      reduction.model = 'returnUMAP', 
+                      new.reduction.name = 'ref.umap.Jessa')
+
+query@meta.data[paste0('predicted.id.Jessa_full')] <- query@meta.data$predicted.id
+query@meta.data[paste0('predicted.id.score.Jessa_full')] <- query@meta.data$predicted.id.score
+        
+query@meta.data$predicted.id <- NULL
+query@meta.data$predicted.id.score <- NULL
+
+query <- SetIdent(query, value = 'predicted.id.Jessa_full')
+
+predictions.Jessa_malignancy <- TransferData(anchorset = anchors, refdata = Jessa$Malignant_normal_consensus_Jessa2022, dims = 1:config$dims_use)
+predictions.Jessa_annotation <- TransferData(anchorset = anchors, refdata = Jessa$Cell_type_consensus_Jessa2022, dims = 1:config$dims_use)
+
+write_delim(predictions.Jessa_malignancy, 
+            file = file.path(params$wd, output_dir, paste0(params$prefix,"_predictions.Jessa.malignant.full.tsv")), 
+            delim = "\t")
+write_delim(predictions.Jessa_annotation, 
+            file = file.path(params$wd, output_dir, paste0(params$prefix,"_predictions.Jessa.annotation.full.tsv")), 
+            delim = "\t")
+
+query$Mapping.score.Jessa_full <- MappingScore(anchors = anchors, ndim = config$dims_use)
+gc()
+```
+
+
+```{r find_and_transfer_Jessa_malignant}
+
+anchors <- FindTransferAnchors(reference = Jessa_malignant,
+                                      query = query_malignant,
+                                      dims = 1:config$dims_use,
+                                      reference.reduction = config$reference_reduction,
+                                      normalization.method = 'LogNormalize',
+                                      features = rownames(Jessa_malignant[["RNA"]]))
+
+query_malignant <- MapQuery(anchorset = anchors,
+                      reference = Jessa_malignant,
+                      query = query_malignant,
+                      refdata = 'Cell_type_consensus_Jessa2022',
+                      reference.reduction = config$reference_reduction,
+                      reduction.model = 'returnUMAP', 
+                      new.reduction.name = 'ref.umap.Jessa')
+
+query_malignant@meta.data[paste0('predicted.id.Jessa')] <- query_malignant@meta.data$predicted.id
+query_malignant@meta.data[paste0('predicted.id.score.Jessa')] <- query_malignant@meta.data$predicted.id.score
+        
+query_malignant@meta.data$predicted.id <- NULL
+query_malignant@meta.data$predicted.id.score <- NULL
+
+query_malignant <- SetIdent(query_malignant, value = 'predicted.id.Jessa')
+
+predictions.Jessa <- TransferData(anchorset = anchors, refdata = Jessa_malignant$Cell_type_consensus_Jessa2022, dims = 1:config$dims_use)
+
+write_delim(predictions.Jessa, 
+            file = file.path(params$wd, output_dir, paste0(params$prefix,"_predictions.Jessa.annotation.subset.tsv")), 
+            delim = "\t")
+
+query_malignant$Mapping.score.Jessa <- MappingScore(anchors = anchors, ndim = config$dims_use)
+gc()
+```
+
+```{r find_and_transfer_Liu}
+
+anchors <- FindTransferAnchors(reference = Liu_malignant,
+                                      query = query_malignant,
+                                      dims = 1:config$dims_use,
+                                      reference.reduction = config$reference_reduction,
+                                      normalization.method = 'LogNormalize',
+                                      features = rownames(Liu_malignant[["RNA"]]))
+
+query_malignant <- MapQuery(anchorset = anchors,
+                      reference = Liu_malignant,
+                      query = query_malignant,
+                      refdata = 'annotation',
+                      reference.reduction = config$reference_reduction,
+                      reduction.model = 'returnUMAP', 
+                      new.reduction.name = 'ref.umap.Liu')
+
+query_malignant@meta.data[paste0('predicted.id.Liu')] <- query_malignant@meta.data$predicted.id
+query_malignant@meta.data[paste0('predicted.id.score.Liu')] <- query_malignant@meta.data$predicted.id.score
+        
+query_malignant@meta.data$predicted.id <- NULL
+query_malignant@meta.data$predicted.id.score <- NULL
+
+query_malignant <- SetIdent(query_malignant, value = 'predicted.id.Liu')
+
+predictions.Liu <- TransferData(anchorset = anchors, refdata = Liu_malignant$annotation, dims = 1:config$dims_use)
+
+write_delim(predictions.Liu, 
+            file = file.path(params$wd, output_dir, paste0(params$prefix,"_predictions.Liu.annotation.subset.tsv")), 
+            delim = "\t")
+
+query_malignant$Mapping.score.Liu <- MappingScore(anchors = anchors, ndim = config$dims_use)
+
+rm(anchors)
+gc()
+```
+
+```{r find_and_transfer_RaLi}
+
+anchors <- FindTransferAnchors(reference = RaLi,
+                                      query = query,
+                                      dims = 1:config$dims_use,
+                                      reference.reduction = config$reference_reduction,
+                                      normalization.method = 'LogNormalize',
+                                      features = rownames(RaLi[["RNA"]]))
+
+query <- MapQuery(anchorset = anchors,
+                      reference = RaLi,
+                      query = query,
+                      refdata = 'annotation',
+                      reference.reduction = config$reference_reduction,
+                      reduction.model = 'returnUMAP', 
+                      new.reduction.name = 'ref.umap.RaLi')
+
+query@meta.data[paste0('predicted.id.RaLi')] <- query@meta.data$predicted.id
+query@meta.data[paste0('predicted.id.score.RaLi')] <- query@meta.data$predicted.id.score
+        
+query@meta.data$predicted.id <- NULL
+query@meta.data$predicted.id.score <- NULL
+
+query <- SetIdent(query, value = 'predicted.id.RaLi')
+
+predictions.RaLi <- TransferData(anchorset = anchors, refdata = RaLi$annotation, dims = 1:config$dims_use)
+
+write_delim(predictions.RaLi, 
+            file = file.path(params$wd, output_dir, paste0(params$prefix,"_predictions.RaLi.annotation.subset.tsv")), 
+            delim = "\t")
+
+query$Mapping.score.RaLi <- MappingScore(anchors = anchors, ndim = config$dims_use)
+
+rm(anchors)
+gc()
+```
+
+```{r Confidence_of_label_transfer_Jessa_malignant, fig.height=5, fig.width=10}
+
+mapping <- quantile(query_malignant$Mapping.score.Jessa, 0.20)
+prediction <- quantile(query_malignant$predicted.id.score.Jessa, 0.20)
+
+query_malignant@meta.data[["Mapping.score.Jessa"]] %>%
+    tibble::enframe() %>%
+    ggplot(aes(x=value)) + 
+    geom_histogram(color = "white", bins = 50) +
+    geom_vline(xintercept = 0.9, linetype = 2, color = "green") + 
+    geom_vline(xintercept = mapping, linetype = 2, color = "red") +
+    theme_classic(base_size = 14) +
+    ggtitle(paste("distribution of mapping score Jessa"))
+
+query_malignant@meta.data[["predicted.id.score.Jessa"]] %>%
+    tibble::enframe() %>%
+    ggplot(aes(x=value)) + 
+    geom_histogram(color = "white", bins = 50) +
+    geom_vline(xintercept = 0.9, linetype = 2, color = "green") + 
+    geom_vline(xintercept = prediction, linetype = 2, color = "red") +
+    theme_classic(base_size = 14) +
+    ggtitle(paste("distribution of max prediction score Jessa"))
+
+
+query_malignant$predicted.id.Jessa.filtered <- ifelse(query_malignant$Mapping.score.Jessa < mapping & query_malignant$predicted.id.score.Jessa < prediction, yes = "Undefined", no = query_malignant$predicted.id.Jessa)
+
+p1 <- do_FeaturePlot(query_malignant, reduction = 'runid.umap', features = 'Mapping.score.Jessa', order = T) + 
+  ggtitle(paste('Mapping score, threshold at', round(mapping, digits = 2))) + coord_fixed()
+p2 <- do_FeaturePlot(query_malignant, reduction = 'runid.umap', features = 'predicted.id.score.Jessa', order = T) + 
+  ggtitle(paste('Predicted score, threshold at', round(prediction, 2))) + coord_fixed()
+
+p1|p2
+```
+
+```{r Confidence_of_label_transfer_Jessa, fig.height=5, fig.width=10}
+
+mapping <- quantile(query$Mapping.score.Jessa_full, 0.20)
+prediction <- quantile(query$predicted.id.score.Jessa_full, 0.20)
+malignant <- quantile(query$predicted.Malignant.score, 0.20)
+
+
+query@meta.data[["Mapping.score.Jessa_full"]] %>%
+    tibble::enframe() %>%
+    ggplot(aes(x=value)) + 
+    geom_histogram(color = "white", bins = 50) +
+    geom_vline(xintercept = 0.9, linetype = 2, color = "green") + 
+    geom_vline(xintercept = mapping, linetype = 2, color = "red") +
+    theme_classic(base_size = 14) +
+    ggtitle(paste("distribution of mapping score Jessa full dataset"))
+
+query@meta.data[["predicted.id.score.Jessa_full"]] %>%
+    tibble::enframe() %>%
+    ggplot(aes(x=value)) + 
+    geom_histogram(color = "white", bins = 50) +
+    geom_vline(xintercept = 0.9, linetype = 2, color = "green") + 
+    geom_vline(xintercept = prediction, linetype = 2, color = "red") +
+    theme_classic(base_size = 14) +
+    ggtitle(paste("distribution of annotation prediction score Jessa full dataset"))
+
+query@meta.data[["predicted.Malignant.score"]] %>%
+    tibble::enframe() %>%
+    ggplot(aes(x=value)) + 
+    geom_histogram(color = "white", bins = 50) +
+    geom_vline(xintercept = 0.9, linetype = 2, color = "green") + 
+    geom_vline(xintercept = malignant, linetype = 2, color = "red") +
+    theme_classic(base_size = 14) +
+    ggtitle(paste("distribution of malignant prediction score Jessa full dataset"))
+
+
+query$predicted.id.Jessa.filtered <- ifelse(query$Mapping.score.Jessa_full < mapping & query$predicted.id.score.Jessa_full < prediction, yes = "Undefined", no = query$predicted.id.Jessa_full)
+
+p1 <- do_FeaturePlot(query, reduction = 'runid.umap', features = 'Mapping.score.Jessa_full', order = T) + 
+  ggtitle(paste('Mapping score')) + coord_fixed()
+p2 <- do_FeaturePlot(query, reduction = 'runid.umap', features = 'predicted.id.score.Jessa_full', order = T) + 
+  ggtitle(paste('Predicted score')) + coord_fixed()
+p3 <- do_FeaturePlot(query, reduction = 'runid.umap', features = 'predicted.Malignant.score', order = T) + 
+  ggtitle(paste('Malignant score')) + coord_fixed()
+
+p1|p2|p3
+```
+
+```{r Confidence_of_label_transfer_Liu, fig.height=5, fig.width=10}
+
+mapping <- quantile(query_malignant$Mapping.score.Liu, 0.20)
+prediction <- quantile(query_malignant$predicted.id.score.Liu, 0.20)
+
+query_malignant@meta.data[["Mapping.score.Liu"]] %>%
+    tibble::enframe() %>%
+    ggplot(aes(x=value)) + 
+    geom_histogram(color = "white", bins = 50) +
+    geom_vline(xintercept = 0.9, linetype = 2, color = "green") + 
+    geom_vline(xintercept = mapping, linetype = 2, color = "red") +
+    theme_classic(base_size = 14) +
+    ggtitle(paste("distribution of mapping score Liu"))
+
+query_malignant@meta.data[["predicted.id.score.Liu"]] %>%
+    tibble::enframe() %>%
+    ggplot(aes(x=value)) + 
+    geom_histogram(color = "white", bins = 50) +
+    geom_vline(xintercept = 0.9, linetype = 2, color = "green") + 
+    geom_vline(xintercept = prediction, linetype = 2, color = "red") +
+    theme_classic(base_size = 14) +
+    ggtitle(paste("distribution of max prediction score Liu"))
+
+
+query_malignant$predicted.id.Liu.filtered <- ifelse(query_malignant$Mapping.score.Liu < mapping & query_malignant$predicted.id.score.Liu < prediction, yes = "Undefined", no = query_malignant$predicted.id.Liu)
+
+p1 <- do_FeaturePlot(query_malignant, reduction = 'umap', features = 'Mapping.score.Liu', order = T) + 
+  ggtitle(paste('Mapping score, threshold at', round(mapping, digits = 2))) + coord_fixed()
+p2 <- do_FeaturePlot(query_malignant, reduction = 'umap', features = 'predicted.id.score.Liu', order = T) + 
+  ggtitle(paste('Predicted score, threshold at', round(prediction, 2))) + coord_fixed()
+
+p1|p2
+```
+
+```{r Confidence_of_label_transfer_RaLi, fig.height=5, fig.width=10}
+
+mapping <- quantile(query$Mapping.score.RaLi, 0.20)
+prediction <- quantile(query$predicted.id.score.RaLi, 0.20)
+
+query@meta.data[["Mapping.score.RaLi"]] %>%
+    tibble::enframe() %>%
+    ggplot(aes(x=value)) + 
+    geom_histogram(color = "white", bins = 50) +
+    geom_vline(xintercept = 0.9, linetype = 2, color = "green") + 
+    geom_vline(xintercept = mapping, linetype = 2, color = "red") +
+    theme_classic(base_size = 14) +
+    ggtitle(paste("distribution of mapping score RaLi"))
+
+query@meta.data[["predicted.id.score.RaLi"]] %>%
+    tibble::enframe() %>%
+    ggplot(aes(x=value)) + 
+    geom_histogram(color = "white", bins = 50) +
+    geom_vline(xintercept = 0.9, linetype = 2, color = "green") + 
+    geom_vline(xintercept = prediction, linetype = 2, color = "red") +
+    theme_classic(base_size = 14) +
+    ggtitle(paste("distribution of max prediction score RaLi"))
+
+
+query$predicted.id.RaLi.filtered <- ifelse(query$Mapping.score.RaLi < mapping & query$predicted.id.score.RaLi < prediction, yes = "Undefined", no = query$predicted.id.RaLi)
+
+p1 <- do_FeaturePlot(query, reduction = 'umap', features = 'Mapping.score.RaLi', order = T) + 
+  ggtitle(paste('Mapping score, threshold at', round(mapping, digits = 2))) + coord_fixed()
+p2 <- do_FeaturePlot(query, reduction = 'umap', features = 'predicted.id.score.RaLi', order = T) + 
+  ggtitle(paste('Predicted score, threshold at', round(prediction, 2))) + coord_fixed()
+
+p1|p2
+```
+
+```{r}
+
+query$annotation.Jessa <- as.character("Healthy")
+query$annotation.Jessa[intersect(colnames(query), colnames(query_malignant))] <- query_malignant$predicted.id.Jessa
+
+query$annotation.Liu <- as.character("Healthy")
+query$annotation.Liu[intersect(colnames(query), colnames(query_malignant))] <- query_malignant$predicted.id.Liu
+
+```
+
+```{r save_seurat, cache = FALSE}
+saveRDS(query, file = file.path(params$wd,output_dir,paste0(params$prefix,"_seurat.rds")))
+saveRDS(query_malignant, file = file.path(output_dir,paste0(params$prefix,"_seurat-malignant.rds")))
+
+
+```
+
+# Reproducibility
+
+This document was last rendered on:
+
+```{r time, echo = FALSE, cache = FALSE}
+
+message(Sys.time())
+
+```
+
+The R session info:
+
+<details>
+
+```{r sinfo, cache = FALSE, echo = FALSE}
+
+sessionInfo()
+
+```
+
+</details>

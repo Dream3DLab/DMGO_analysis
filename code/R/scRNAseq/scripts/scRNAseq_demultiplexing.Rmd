@@ -1,0 +1,155 @@
+---
+title: "`r params$title`"
+author: "riri"
+date: "2023-09-20"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+params:
+  title: NULL
+  wd: NULL
+  assets: NULL
+  prefix: NULL
+---
+
+```{r}
+library(Seurat)
+library(tidyverse)
+library(readr)
+```
+
+Set up directory structure and confirm current working directory:
+
+```{r setup_dir}
+# print current working directory
+getwd()
+
+# specify and create output and figures folders with run prefix
+output_dir <- file.path(params$wd, paste0(params$prefix,'_output/'))
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+figures_dir <- file.path(params$wd,paste0(params$prefix,'_figures/'))
+dir.create(figures_dir, showWarnings = TRUE, recursive = TRUE)
+```
+
+Set up R markdown:
+
+```{r setup}
+
+knitr::opts_chunk$set(
+  # Display PNG in HTML file, but also keep PDF outputs in figures folder
+  dev = c("png", "pdf"), 
+  # Keep all the figures produced in a chunk
+  fig.keep = "all",      
+  # Save all figures to this output folder
+  fig.path = figures_dir,
+  # Do not cache results
+  cache = FALSE)
+
+# not used
+# cache.path = file.path(knitr::opts_knit$get("root.dir"), ".cache/")
+
+# don't use dingbats in PDFs, in order to create Illustrator-friendly figures
+grDevices::pdf.options(useDingbats = FALSE)
+
+```
+
+```{r read in config file}
+config <- read_delim(file.path(params$assets,'demux.config.tsv'), delim = '\t', escape_double = FALSE, trim_ws = TRUE)
+
+# coerce to a list of param:value pairs, and make sure numeric parameters are numeric type
+config <- as.list(tibble::deframe(config[, c(1, 2)]))
+
+# automatically convert each config element to the right type
+config <- lapply(config, type.convert, as.is = TRUE)
+
+config
+```
+
+```{r read 10X data}
+matrices <- Read10X(config$tenX_dir)
+
+umis <- matrices$`Gene Expression`
+htos <- matrices$`Antibody Capture`
+```
+
+filter cells that are detected in both RNA and HTO
+```{r filter cells}
+joint.bcs <- intersect(colnames(umis), colnames(htos))
+
+umis <- umis[,joint.bcs]
+htos <- as.matrix(htos[,joint.bcs])
+
+rownames(htos)
+```
+
+Create the seurat object and add HTO data
+```{r}
+seurat <- CreateSeuratObject(counts = umis)
+
+seurat[["HTO"]] <- CreateAssayObject(counts = htos)
+seurat <- NormalizeData(seurat, assay = "HTO", normalization.method = "CLR")
+```
+
+Demultiplex cells and visualize the results
+
+```{r demux}
+seurat <- HTODemux(seurat, assay = "HTO", positive.quantile = config$pos.quantile, seed = config$seed_use)
+table(seurat$HTO_classification.global)
+table(seurat$HTO_classification)
+```
+```{r HTO_Enrichments_1, fig.height=15, fig.width=10}
+Idents(seurat) <- "HTO_maxID"
+RidgePlot(seurat, assay = "HTO", features = rownames(seurat[["HTO"]]))
+```
+
+```{r HTO_Enrichments_2, fig.height=5, fig.width=10}
+Idents(seurat) <- "HTO_maxID"
+HTOHeatmap(seurat, assay = "HTO")
+Idents(seurat) <- "HTO_classification.global"
+VlnPlot(seurat, features = "nCount_RNA", log = T)
+```
+
+subset the seurat on singlets and check for batch effects
+
+```{r Batch_effects, fig.height=5, fig.width=10}
+
+# Extract the singlets
+singlets <- subset(seurat, idents = "Singlet")
+
+singlets <- NormalizeData(singlets)
+# Select the top 1000 most variable features
+singlets <- FindVariableFeatures(singlets, selection.method = "mean.var.plot")
+
+# Scaling RNA data, we only scale the variable features here for efficiency
+singlets <- ScaleData(singlets, features = VariableFeatures(singlets))
+
+# Run PCA
+singlets <- RunPCA(singlets, features = VariableFeatures(singlets))
+
+# We select the top 10 PCs for clustering and tSNE based on PCElbowPlot
+singlets <- RunTSNE(singlets, reduction = "pca", dims = 1:20)
+
+# Projecting singlet identities on TSNE visualization
+SCpubr::do_DimPlot(singlets, group.by = "HTO_classification", reduction = "tsne") + coord_fixed()
+```
+
+
+Saves non-processed seurat object with singlets from HTODemux
+Input for preprocessing pipeline
+```{r cleaning & saving}
+
+seurat <- subset(seurat, idents = "Singlet")
+seurat$sample <- seurat$HTO_classification
+
+HTO_meta <- seurat@meta.data
+
+seurat@meta.data[,4:11] <- NULL
+
+saveRDS(seurat, file = file.path(output_dir, paste0(params$title,"_seurat.rds")))
+write_tsv(HTO_meta, file = file.path(output_dir, paste0(params$title,"_HTO_meta.tsv")))
+```
+
+```{r}
+sessionInfo()
+```

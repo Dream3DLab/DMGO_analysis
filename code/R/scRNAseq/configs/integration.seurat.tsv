@@ -1,0 +1,4 @@
+sample	path	color
+BRO_t1_2_cells	/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO_t1-t2/T1_2/preprocessing/preprocessing_cc_gender.regressed_output/T1_2_preprocessing_cc_gender.regressed_seurat.rds	gold1
+BRO_t1_1_nuclei	/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO_t1-t2/nuclei_t1.rds	deepskyblue3
+BRO_t1_1_cells	/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO_t1-t2/T1_2/preprocessing/T1_1_preprocessing_cc_gender.regressed_output/T1_1_preprocessing_cc_gender.regressed_seurat.rds	springgreen4
