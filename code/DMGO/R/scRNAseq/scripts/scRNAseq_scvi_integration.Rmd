@@ -1,0 +1,117 @@
+---
+title: "scVI report"
+author: "riri"
+date: "`r format(Sys.time(), '%Y/%m/%d %H:%M:%S')`"
+output: html_document
+editor_options:
+  chunk_output_type: inline
+params:
+  assets: NULL
+  output_dir: NULL
+  prefix: NULL
+---
+
+```{r load libraries}
+
+library(Seurat)
+library(reticulate)
+library(sceasy)
+library(ggplot2)
+library(tidyverse)
+library(SeuratDisk)
+
+use_python("/usr/local/bin/python")
+
+sc <- import("scanpy", convert = FALSE)
+scvi <- import("scvi", convert = FALSE)
+```
+
+```{r}
+info_samples <- read_tsv(file.path(params$assets,".seurat.tsv"))
+```
+
+
+```{r}
+seurat <- list()
+
+for (row in 1:nrow(info_samples)) {
+        x <- readRDS(info_samples[row, ]$path)
+        x$RunID <- info_samples[row, ]$sample
+        seurat <- append(seurat, x)
+        rm(x)
+}
+
+seurat
+```
+
+
+```{r read rds and convert to adata}
+
+top2000 <- head(VariableFeatures(seurat), 2000)
+seurat<- seurat[top2000]
+
+adata <- convertFormat(seurat, from="seurat", to="anndata", main_layer="counts", drop_single_values=FALSE)
+
+seurat
+adata
+```
+
+```{r dimplots_before_integration, fig.height=10, fig.width=10}
+SCpubr::do_DimPlot(seurat, reduction = "pca", group.by = "RunID", pt.size = 0.2) + coord_fixed()
+SCpubr::do_DimPlot(seurat, reduction = "umap", group.by = "RunID", pt.size = 0.2) + coord_fixed()
+```
+
+```{r create, train and plot on RunID}
+# run setup_anndata
+scvi$model$SCVI$setup_anndata(adata, batch_key = "RunID")
+
+# create the model
+model = scvi$model$SCVI(adata)
+
+# train the model
+model$train()
+
+latent = model$get_latent_representation()
+
+latent <- as.matrix(latent)
+rownames(latent) = colnames(seurat)
+seurat[["runid.scvi"]] <- CreateDimReducObject(embeddings = latent, key = "runid.scvi_", assay = DefaultAssay(seurat))
+
+seurat <- RunUMAP(seurat, dims = 1:10, reduction = "runid.scvi", n.components = 2, seed.use = 420, reduction.name = "runid.umap")
+```
+
+# Plots
+```{r plot_umaps, fig.height=10, fig.width=20}
+
+p1 <- SCpubr::do_DimPlot(seurat, reduction = "runid.umap", group.by = "RunID", split.by = "RunID", pt.size = 0.2, plot.title = "Integrated") + coord_fixed()
+
+p2 <- SCpubr::do_FeaturePlot(seurat, reduction = "runid.umap",features = "EGFP", split.by = "RunID", pt.size = 0.2, plot.title = "Integrated") + coord_fixed()
+
+p1|p2
+```
+
+```{r save output}
+saveRDS(seurat, file = file.path(params$output_dir,paste0(params$prefix,"_seurat_scvi.rds")))
+```
+
+# Reproducibility
+
+This document was last rendered on:
+
+```{r time, echo = FALSE, cache = FALSE}
+
+message(Sys.time())
+
+```
+
+The R session info:
+
+<details>
+
+```{r sinfo, cache = FALSE, echo = FALSE}
+
+sessionInfo()
+
+```
+
+</details>

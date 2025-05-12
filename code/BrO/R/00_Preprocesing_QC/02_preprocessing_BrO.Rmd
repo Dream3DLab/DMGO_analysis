@@ -1,0 +1,679 @@
+---
+title: "QC and pre-processing report"
+date: "`r format(Sys.time(), '%Y/%m/%d %H:%M:%S')`"
+output: html_document
+editor_options:
+  chunk_output_type: inline
+params:
+  title: "preprocessing"
+  wd: "/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO/Timecourse"
+  assets: "/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO/Timecourse/assets"
+  script: "preprocessing_cc.regressed_2"
+  sample: "BRO"
+---
+
+## Scripts are derived from Jessa et al. 2022
+## https://github.com/fungenomics/HGG-oncohistones
+
+```{r load_libraries, cache = FALSE, message = FALSE, warning = FALSE}
+
+library(dplyr)
+library(tidyr)
+library(readr)
+library(data.table)
+library(glue)
+library(DT)
+library(stringr)
+library(kableExtra)
+library(RColorBrewer)
+library(ggplot2)
+library(cowplot)
+library(Seurat)
+library(scCustomize)
+library(harmony)
+library(dittoSeq)
+library(clustree)
+library(purrr)
+library(openxlsx)
+library(SCpubr)
+library(DoubletFinder)
+
+# custom functions
+source('/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/_Docs/_functions/functions_scRNAseq_preprocessing.R')
+
+options(future.globals.maxSize= 2000*1024^2)
+```
+
+Read in the config file for this run. These parameters should be located in ~/assets and contain all information needed for the run
+
+```{r read_config, message = FALSE, warning = FALSE}
+config <- read_delim(file.path(params$assets,'02_preprocessing.config.tsv'), delim = '\t', escape_double = FALSE, trim_ws = TRUE)
+
+# coerce to a list of param:value pairs, and make sure numeric parameters are numeric type
+config <- as.list(tibble::deframe(config[, c(1, 2)]))
+
+# automatically convert each config element to the right type
+config <- lapply(config, type.convert, as.is = TRUE)
+
+config
+```
+
+Set up directory structure and confirm current working directory:
+
+```{r setup_dir}
+# print current working directory
+getwd()
+
+# specify and create output and figures folders with run prefix
+output_dir <- file.path(params$wd,"output",paste0(params$sample,'_',params$script,'_output'))
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+figures_dir <- file.path(params$wd,"output",paste0(params$sample,'_',params$script,'_figures'))
+dir.create(figures_dir, showWarnings = TRUE, recursive = TRUE)
+```
+
+Set up R markdown:
+
+```{r setup}
+
+knitr::opts_chunk$set(
+  # Display PNG in HTML file, but also keep PDF outputs in figures folder
+  dev = c("png", "pdf"), 
+  # Keep all the figures produced in a chunk
+  fig.keep = "all",      
+  # Save all figures to this output folder
+  fig.path = file.path(params$wd,"output",paste0(params$sample,'_',params$script,'_figures/')),
+  # Do not cache results
+  cache = FALSE)
+
+# not used
+# cache.path = file.path(knitr::opts_knit$get("root.dir"), ".cache/")
+
+# don't use dingbats in PDFs, in order to create Illustrator-friendly figures
+grDevices::pdf.options(useDingbats = FALSE)
+
+```
+# Initialization and initial filtering
+
+## Load Seurat object
+
+```{r read seurat object and split}
+seurat_prefilt <- readRDS(config$cellranger_dir)
+
+for(obj in names(seurat_prefilt)){
+  seurat_prefilt[[obj]]@meta.data[["Day"]] <- seurat_prefilt[[obj]]@meta.data[["orig.ident"]]
+}
+
+```
+
+## Compute mitochondrial and ribosomal content
+
+For quality control, we assess the mitochondrial content and ribosomal content
+at the single-cell level, using the proportion of reads which map to mitochondrial
+genes, or ribosomal protein genes, respectively.
+
+
+```{r compute mito and ribo genes}
+mito_genes <- list()
+percent_mito <- list()
+
+for (i in names(seurat_prefilt)) {
+  print(i)
+  if (config$species == "h_sapiens") {
+    mito_genes[[i]] <- grep("^MT-", rownames(GetAssayData(object = seurat_prefilt[[i]], layer = "counts")), value = TRUE)
+    } else if (config$species == "m_musculus") {
+      mito_genes[[i]] <- grep("^mt-", rownames(GetAssayData(object = seurat_prefilt[[i]], layer = "counts")), value = TRUE)
+    }
+  # compute, for each cell, the proportion of reads in mitochondrial genes, and add to the metadata
+percent_mito[[i]] <- Matrix::colSums(GetAssayData(object = seurat_prefilt[[i]], layer = "counts")[mito_genes[[i]], ]) /
+  Matrix::colSums(GetAssayData(object = seurat_prefilt[[i]], layer = "counts")) * 100
+
+seurat_prefilt[[i]] <- AddMetaData(seurat_prefilt[[i]], percent_mito[[i]], col.name = "percent.mito")
+}
+
+ribo_genes <- list()
+percent_ribo <- list()
+
+for (i in names(seurat_prefilt)) {
+  print(i)
+  
+  if (config$species == "h_sapiens") {
+    ribo_genes[[i]] <- grep("^RPS|^RPL|^MRPS|^MRPL", 
+                            rownames(GetAssayData(object = seurat_prefilt[[i]], layer = "counts")), value =TRUE)
+    } else if (config$species == "m_musculus") {
+      ribo_genes[[i]] <- grep("^Rps|^Rpl|^Mrps|^Mrpl", 
+                              rownames(GetAssayData(object = seurat_prefilt[[i]], layer = "counts")), value = TRUE)
+    }
+  # compute, for each cell, the proportion of reads in mitochondrial genes, and add to the metadata
+percent_ribo[[i]] <- Matrix::colSums(GetAssayData(object = seurat_prefilt[[i]], layer = "counts")[ribo_genes[[i]], ]) /
+  Matrix::colSums(GetAssayData(object = seurat_prefilt[[i]], layer = "counts")) * 100
+
+seurat_prefilt[[i]] <- AddMetaData(seurat_prefilt[[i]], percent_ribo[[i]], "percent.ribo")
+}
+```
+
+## Initialize warnings
+
+```{r warnings}
+warnings <- list()
+
+for (i in names(seurat_prefilt)) {
+warnings[[i]] <- list("LOW_N_CELLS"        = FALSE,
+                      "SAMPLE_REMOVED"  = FALSE,
+                 "HIGH_MITO"          = FALSE,
+                 "HIGH_PROP_FILTERED" = FALSE,
+                 "LOW_AVG_UMI"        = FALSE,
+                 "CC_ASSIGNMENT"     = FALSE,
+                 "SMALL_CLUSTERS"     = FALSE)
+}
+```
+
+# QC and filtering
+
+In this section, we first load the cellranger QC metrics and display them here.
+We then compute four QC metrics for scRNAseq, filter cells based on the distributions
+of these metrics, and then assess the distributions of these metrics after filtering.
+
+## Generate thresholds
+
+The thresholds used are a combination of hard cutoffs and cutoffs computed based
+on the distribution of each metric within the sample. In the case of `min_features`,
+this allows to set a permissive hard cutoff, and use a more stringent cutoff if the quality
+of the sample allows. In the case of `max_mito`, this allows to set a stringent hard cutoff,
+and use a more permissive cutoff if the quality of the sample necessitates doing
+so in order to avoid losing the majority of cells.
+
+```{r filtering_param}
+thresholds <- list()
+keep_cells <- list()
+
+for(i in names(seurat_prefilt)) {
+ (thresholds[[i]] <- data.frame(
+  # the minimum number of features will be the greater of:
+  # 400, or 2 standard deviations below the mean
+  min_features = max(400, round(mean(seurat_prefilt[[i]]@meta.data$nFeature_RNA) -
+                                  2*sd(seurat_prefilt[[i]]@meta.data$nFeature_RNA))),
+  max_features = round(mean(seurat_prefilt[[i]]@meta.data$nFeature_RNA) +
+                         2*sd(seurat_prefilt[[i]]@meta.data$nFeature_RNA)),
+  min_mito     = 0,
+  # by default,
+  # the max mitochondrial content will be the maximum of:
+  # 5%, or 2 standard deviations above the mean
+  # the parameter config$max_mito allows to set a hard upper threshold,
+  # which takes precedence
+  max_mito     = ifelse(!is.na(config$max_mito),
+                        config$max_mito,
+                        max(5, round(mean(seurat_prefilt[[i]]@meta.data$percent.mito) +
+                                       2*sd(seurat_prefilt[[i]]@meta.data$percent.mito))
+                        )
+  ),
+  # set a max of 0 in case the value 2 standard deviations below the mean
+  # is negative
+  min_umi      = max(0, round(mean(seurat_prefilt[[i]]@meta.data$nCount_RNA) -
+                                2*sd(seurat_prefilt[[i]]@meta.data$nCount_RNA))),
+  max_umi      = round(mean(seurat_prefilt[[i]]@meta.data$nCount_RNA) +
+                         2*sd(seurat_prefilt[[i]]@meta.data$nCount_RNA))
+))
+
+# given the resulting thresholds, call a function to identify the cells
+# which pass all filters, which returns barcodes
+keep_cells[[i]] <- get_cells_to_filter(
+  seurat    = seurat_prefilt[[i]],
+  min_features = thresholds[[i]]$min_features,
+  max_features = thresholds[[i]]$max_features,
+  min_mito  = thresholds[[i]]$min_mito,
+  max_mito  = thresholds[[i]]$max_mito,
+  min_umi   = thresholds[[i]]$min_umi,
+  max_umi   = thresholds[[i]]$max_umi
+)
+}
+
+```
+
+## QC metrics before filtering
+
+Visualize each QC metric:
+
+```{r generate_vln_QC_before_filters, fig.width = 10, fig.height = 6}
+p1 <- list()
+p2 <- list()
+
+# violin plots
+for(i in names(seurat_prefilt)) {
+p1[[i]] <- plot_grid(
+          ggdraw() +
+            draw_label(i, x = 0, hjust = 0),
+          plot_grid(
+          VlnPlot(seurat_prefilt[[i]], c("nFeature_RNA"), pt.size = -1, layer = "counts") +
+            theme(legend.position = "none"),
+          VlnPlot(seurat_prefilt[[i]], c("nCount_RNA"), pt.size = -1, layer = "counts") +
+            theme(legend.position = "none"),
+          VlnPlot(seurat_prefilt[[i]], c("percent.mito"), pt.size = -1, layer = "counts") +
+            theme(legend.position = "none"),
+          VlnPlot(seurat_prefilt[[i]], c("percent.ribo"), pt.size = -1, layer = "counts") +
+            theme(legend.position = "none"),
+          ncol = 4), 
+          ncol = 1, rel_heights = c(0.1,1))
+
+# regenerate with points
+p2[[i]] <- plot_grid(
+          ggdraw() +
+            draw_label(i, x = 0, hjust = 0),
+          plot_grid(VlnPlot(seurat_prefilt[[i]], c("nFeature_RNA"), pt.size = 0.1, layer = "counts") +
+            theme(legend.position = "none"),
+          VlnPlot(seurat_prefilt[[i]], c("nCount_RNA"), pt.size = 0.1, layer = "counts") +
+            theme(legend.position = "none"),
+          VlnPlot(seurat_prefilt[[i]], c("percent.mito"), pt.size = 0.1, layer = "counts") +
+            theme(legend.position = "none"),
+          VlnPlot(seurat_prefilt[[i]], c("percent.ribo"), pt.size = 0.1, layer = "counts") +
+            theme(legend.position = "none"),
+          ncol = 4), 
+          ncol = 1, rel_heights = c(0.1,1))
+}
+```
+
+```{r 01_vln_QC_before_filters, fig.width = 10, fig.height = 6, echo = FALSE, results = 'asis'}
+walk(p1, print)
+walk(p2, print)
+```
+
+## Filtering and QC metrics after filtering
+
+Using the barcodes which passed all filters, subset the Seurat objects to generate
+a filtered object:
+
+```{r filter_seurat}
+seurat <- list()
+
+# subset the object using the barcodes of the cells to keep
+for (i in names(seurat_prefilt)) {
+  if (ncol(seurat_prefilt[[i]]) >50) {
+    print(paste("filtering", i))
+    seurat[[i]] <- subset(seurat_prefilt[[i]], cells = keep_cells[[i]])
+  } else {
+    print(paste(ncol(seurat_prefilt[[i]]),"cells detected, removing", i))
+    seurat_prefilt[[i]] <- NULL
+    warnings[[i]]$SAMPLE_REMOVED <- TRUE
+  }
+}
+```
+
+## Output summary stats and filtering thresholds
+
+For each of the metrics we filtered on, we save the min, max and mean before and after filtering, as well as the lower and upper thresholds used.
+
+```{r filtering_metrics}
+
+filtering_criteria <- c("nFeature_RNA", "nCount_RNA", "percent.mito", "percent.ribo")
+
+# compute summary stats for each metric
+filtering_metrics <- list()
+N_cells_metrics <- list()
+
+for (i in names(seurat)) {
+  filtering_metrics[[i]] <- sapply(filtering_criteria, function(criterion) {
+    
+    min_pre   <- round(min(seurat_prefilt[[i]]@meta.data  %>% pull(criterion)), 2)
+    mean_pre  <- mean(seurat_prefilt[[i]]@meta.data %>% pull(criterion))
+    max_pre   <- max(seurat_prefilt[[i]]@meta.data  %>% pull(criterion))
+    sd_pre    <- sd(seurat_prefilt[[i]]@meta.data   %>% pull(criterion))
+    
+    min_post  <- min(seurat[[i]]@meta.data  %>% pull(criterion))
+    mean_post <- mean(seurat[[i]]@meta.data %>% pull(criterion))
+    max_post  <- max(seurat[[i]]@meta.data  %>% pull(criterion))
+    sd_post   <- sd(seurat[[i]]@meta.data   %>% pull(criterion))
+    
+    return(c("min.preQC"   = min_pre,
+             "mean.preQC"  = mean_pre,
+             "max.preQC"   = max_pre,
+             "sd.preQC"    = sd_pre,
+             "min.postQC"  = min_post,
+             "mean.postQC" = mean_post,
+             "max.postQC"  = max_post,
+             "sd.postQC"   = sd_post))
+    
+  })
+  
+  # round to 2 decimal places
+  filtering_metrics[[i]] <- apply(filtering_metrics[[i]], 2, round, 2)
+  
+  # transform into a dataframe
+  filtering_metrics[[i]] <- filtering_metrics[[i]] %>%
+    t() %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column(var = "criterion") %>%
+    dplyr::select(criterion, min.preQC, min.postQC, max.preQC, 
+                  max.postQC, mean.preQC, mean.postQC, sd.preQC, sd.postQC)
+  
+  # add thresholds
+  filtering_metrics[[i]]$min.threshold <- c(thresholds[[i]]$min_features,
+                                       thresholds[[i]]$min_umi,
+                                       thresholds[[i]]$min_mito,
+                                       # No min threshold used for % ribo
+                                       NA)
+  
+  filtering_metrics[[i]]$max.threshold <- c(thresholds[[i]]$max_features,
+                                       thresholds[[i]]$max_umi,
+                                       thresholds[[i]]$max_mito,
+                                       # No max threshold used for % ribo
+                                       NA)
+  
+  N_cells_metrics[[i]] <- data.frame(
+    "N_cells_before" = dim(seurat_prefilt[[i]]@meta.data)[1],
+    "N_cells_after"  = dim(seurat[[i]]@meta.data)[1]) %>%
+    mutate(Prop_kept = round(N_cells_after / N_cells_before, 2))
+}
+
+thresholds_df <- as.data.frame(do.call(rbind, thresholds))
+filtering_metrics_df <- as.data.frame(do.call(rbind, filtering_metrics))
+N_cells_metrics_df <- as.data.frame(do.call(rbind, N_cells_metrics))
+
+
+# compute number of cells before and after filtering
+
+
+
+thresholds_df %>% 
+  kbl(escape = FALSE) %>% 
+  kable_styling(position = "center")
+
+filtering_metrics_df %>%
+  kbl(escape = FALSE) %>%
+  kable_styling(position = "center")
+
+N_cells_metrics_df %>% 
+  kbl(escape = FALSE) %>% 
+  kable_styling(position = "center")
+```
+
+
+This report will register warnings if:
+
+- there are few cells after filtering (<1000)
+- more than 40% of cells were filtered out
+- the max mitochondrial content after filtering is > 5% (indicating a higher threshold needed to be used)
+- the average number of UMIs after filtering is < 2000
+
+The warnings will be output at the end of the report, and saved as a TSV
+if any warning flags are `TRUE`.
+
+
+```{r qc_warnings}
+
+for (i in names(seurat)) {
+if (N_cells_metrics[[i]]$N_cells_after < 1000) warnings[[i]]$LOW_N_CELLS <- TRUE
+if (N_cells_metrics[[i]]$Prop_kept < 0.6) warnings[[i]]$HIGH_PROP_FILTERED <- TRUE
+if (filtering_metrics[[i]][filtering_metrics[[i]]$criterion ==
+                      "nCount_RNA", ]$mean.postQC < 2000) warnings[[i]]$LOW_AVG_UMI <- TRUE
+if (filtering_metrics[[i]][filtering_metrics[[i]]$criterion ==
+                      "percent.mito", ]$max.postQC > 5) warnings[[i]]$HIGH_MITO <- TRUE
+}
+```
+
+Regenerate the violin plots after filtering:
+
+```{r generate_vln_QC_after_filters, fig.width = 10, fig.height = 6}
+p3 <- list()
+p4 <- list()
+
+# violin plots
+for(i in names(seurat_prefilt)) {
+p3[[i]] <- plot_grid(
+          ggdraw() +
+            draw_label(i, x = 0, hjust = 0),
+          plot_grid(
+          VlnPlot(seurat[[i]], c("nFeature_RNA"), pt.size = -1, layer = "counts") +
+            theme(legend.position = "none"),
+          VlnPlot(seurat[[i]], c("nCount_RNA"), pt.size = -1, layer = "counts") +
+            theme(legend.position = "none"),
+          VlnPlot(seurat[[i]], c("percent.mito"), pt.size = -1, layer = "counts") +
+            theme(legend.position = "none"),
+          VlnPlot(seurat[[i]], c("percent.ribo"), pt.size = -1, layer = "counts") +
+            theme(legend.position = "none"),
+          ncol = 4), 
+          ncol = 1, rel_heights = c(0.1,1))
+
+# regenerate with points
+p4[[i]] <-  plot_grid(
+          ggdraw() +
+            draw_label(i, x = 0, hjust = 0),
+          plot_grid(VlnPlot(seurat[[i]], c("nFeature_RNA"), pt.size = 0.1, layer = "counts") +
+            theme(legend.position = "none"),
+          VlnPlot(seurat[[i]], c("nCount_RNA"), pt.size = 0.1, layer = "counts") +
+            theme(legend.position = "none"),
+          VlnPlot(seurat[[i]], c("percent.mito"), pt.size = 0.1, layer = "counts") +
+            theme(legend.position = "none"),
+          VlnPlot(seurat[[i]], c("percent.ribo"), pt.size = 0.1, layer = "counts") +
+            theme(legend.position = "none"),
+          ncol = 4), 
+          ncol = 1, rel_heights = c(0.1,1))
+}
+```
+
+```{r 02_vln_QC_after_filters, fig.width = 10, fig.height = 6, echo = FALSE, results = 'asis'}
+walk(p3, print)
+walk(p4, print)
+```
+
+
+# Normalization and scaling
+
+Normalization is performed using two different methods. `SCTransform` normalizes UMI data
+using a variance stabilized transform based on a negative binomial regression model, and
+simultaneously regresses unwanted sources of variation (by default, number
+of UMIs and mitochondrial content). The sequence of `NormalizeData`,
+`FindVariableFeatures`, and `ScaleData` comprise the second method, which scale
+counts to 10,000 UMIs per cell, log2-transform counts, and then regress out
+unwanted sources of variation.
+
+The log-normalized
+values are set as the default assay in the Seurat object, but the SCTransform values
+are saved in the `SCTransform` assay of the Seurat object, accessible with
+`seurat[["SCT"]]`.
+
+
+```{r preprocessing}
+seurat <- lapply(seurat, seuPreProcess)
+```
+
+
+```{r DoubletFinder}
+bcmvn <- list()
+pK <- list()
+homotypic.prop <- list()
+nExp_poi <- list()
+nExp_poi.adj <- list()
+
+# Estimated Doublet Rate for each dataset
+edr <- estimateDoubletRate.DWM(seur.list = seurat)/100 #use your own known EDR here
+
+for(i in names(seurat)){
+
+  ## pK Identification (no ground-truth)
+  bcmvn[[i]]<- paramSweep(
+    seu=seurat[[i]],
+    PCs = 1:seurat[[i]]@reductions$umap_RNA@misc$n.pcs.used, 
+    num.cores = 4
+  ) %>% summarizeSweep(
+    GT = FALSE
+  ) %>% find.pK() 
+  
+  # Pull out max of bcmvn
+  pK[[i]] <- as.numeric(as.character(bcmvn[[i]]$pK[bcmvn[[i]]$BCmetric==max(bcmvn[[i]]$BCmetric)])) # ugly, but functional...
+  
+  ## Homotypic Doublet Proportion Estimate
+  homotypic.prop[[i]] <- modelHomotypic(seurat[[i]]$seurat_clusters) 
+  
+  nExp_poi[[i]] <- round(edr[[i]]*length(colnames(seurat[[i]])))  
+  nExp_poi.adj[[i]] <- round(nExp_poi[[i]]*(1-homotypic.prop[[i]]))
+}
+
+for(i in 1:length(seurat)){
+  seurat[[i]] <- 
+    doubletFinder( # just changed it so the output metadata column name is customizable
+      seu=seurat[[i]], 
+      PCs = 1:seurat[[i]]@reductions$umap_RNA@misc$n.pcs.used, 
+      pN = 0.25, #default value
+      pK= pK[[i]], 
+      nExp = nExp_poi.adj[[i]],  
+      reuse.pANN = F
+    )
+}
+```
+
+```{r, fig.height=5, fig.width=10}
+p1 <- list()
+for(i in 1:length(seurat)) {
+  table(seurat[[i]]@meta.data[,grep("^DF.classifications", colnames(seurat[[i]]@meta.data))])
+  p1[[i]] <- dittoDimPlot(seurat[[i]], var = grep("^DF.classifications", colnames(seurat[[i]]@meta.data), value = TRUE),
+                          reduction.use = "umap_RNA")
+  seurat[[i]]$singlets <- seurat[[i]]@meta.data[,grep("^DF.classifications", colnames(seurat[[i]]@meta.data))]
+}
+walk(p1, print)
+```
+# Cell cycle scoring
+
+Next, we compute the scores using the method implemented in Seurat:
+
+```{r 04_cell_cycle_combined.seurat, fig.width = 9, fig.height = 8}
+p1 <- list()
+
+# a list of cell cycle markers, from Tirosh et al, 2015, is loaded with combined.seurat;
+# segregate this list into markers of G2/M phase and markers of S phase
+s_genes   <- cc.genes$s.genes
+g2m_genes <- cc.genes$g2m.genes
+
+for (i in names(seurat)){
+
+  seurat[[i]] <- CellCycleScoring(seurat[[i]],
+                             s.features   = s_genes,
+                             g2m.features = g2m_genes)
+  
+  cc.markers <- switch(config$species,
+                       "h_sapiens" = c("PCNA", "TOP2A", "MCM6", "MKI67"),
+                       "m_musculus" = c("Pcna", "Top2a", "Mcm6", "Mki67"))
+  
+  p1[[i]] <- RidgePlot(seurat[[i]], group.by = "Phase", features = cc.markers, ncol = 2, layer = "counts")
+}
+```
+
+```{r}
+walk(p1, print)
+```
+
+
+## Merge a Seurat list to a single Seurat object
+
+```{r 00_all_samples}
+
+seurat_combined <- merge(seurat[[1]], y = unlist(seurat[2:length(seurat)]), 
+             add.cell.ids = names(seurat), merge.data = T)
+
+seurat_combined <- JoinLayers(seurat_combined)
+
+seurat_combined <- subset(seurat_combined, 
+                          subset = singlets == 'Singlet')
+
+seurat_combined <- SetIdent(seurat_combined, value = 'Day')
+
+samples.all <- as.data.frame(table(seurat_combined$Day)) 
+samples.all$percentage <- round(100 * samples.all$Freq/sum(samples.all$Freq))
+
+ggplot(samples.all, aes(fill = Var1, y = percentage, x = Var1)) + 
+    geom_bar(stat = 'identity') +
+    scale_fill_manual(values = cols)+
+    geom_text(aes(label=percentage), vjust=1.6, color="white", size=8) + 
+    ggtitle("contribution of each sample to Seurat object in %") + 
+  NoLegend() +
+  custom_theme
+
+seurat_combined@misc$experiment <- list(
+    experiment_name = params$experiment_id,
+    organism = switch(config$species,
+                     "h_sapiens" = "h_sapiens",
+                     "m_musculus" = "m_musculus"),
+    gene_nomenclature = 'symbol',
+    date_of_analysis = Sys.Date()
+)
+
+seurat_combined@misc$session_info <- sessionInfo()
+# set a new qualitative palette; this saves the palette to seurat_combined@misc$colours
+seurat_combined <- set_qual_pal(seurat_combined)
+```
+
+# Save outputs
+
+All parameters and filtering metrics are saved both within the seurat
+object in the `seurat@misc` slot, as well as in the output directory.
+
+```{r save_parameters}
+
+# parameters are saved with the Seurat object
+seurat_combined@misc$config            <- config
+seurat_combined@misc$filtering_metrics <- filtering_metrics
+seurat_combined@misc$n_cells           <- N_cells_metrics
+
+filtering_metrics_out <- list()
+
+# write metrics/thresholds to file
+for (i in 1:length(filtering_metrics)) {
+filtering_metrics_out[[i]] <- filtering_metrics[[i]] %>%
+  gather("metrics_name", "value", -criterion) %>%
+  unite("metrics", criterion:metrics_name, sep = "_") %>%
+  spread("metrics", "value") %>% 
+  bind_cols(N_cells_metrics[[i]]) 
+
+filtering_metrics_out[[i]]$sample_id <- names(filtering_metrics)[[i]]
+}
+
+filtering_metrics_out <- bind_rows(filtering_metrics_out, .id = 'sample_id')
+filtering_metrics_out$sample_id <- unique(seurat_combined$Day)
+
+write.xlsx(filtering_metrics_out, file = file.path(output_dir, 'filtering_metrics.xlsx'))
+
+```
+
+
+```{r save_seurat, cache = FALSE}
+
+saveRDS(seurat_combined, file = file.path(output_dir,paste0(params$prefix,"_seurat.rds")))
+```
+
+# Warnings
+
+Summary of possible warnings
+
+```{r warn_html, warning = FALSE}
+warnings_df <- as.data.frame(do.call(rbind, warnings))
+
+# if there are any warnings, produce a file
+write_tsv(warnings_df, file.path(output_dir, paste0(config$runID,"_warnings.tsv")))
+
+warnings_df %>% 
+  kbl(escape = FALSE) %>% 
+  kable_styling(position = "center")
+
+```
+
+# Reproducibility
+
+This document was last rendered on:
+
+```{r time, echo = FALSE, cache = FALSE}
+
+message(Sys.time())
+
+```
+
+The R session info:
+
+<details>
+
+```{r sinfo, cache = FALSE, echo = FALSE}
+
+sessionInfo()
+
+```
+
+</details>
+  

@@ -1,0 +1,436 @@
+---
+title: "Coverage_gains"
+author: "riri"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r}
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(ggthemr)
+library(ggrepel)
+library(Pando)
+library(RColorBrewer)
+```
+
+```{r}
+get_mode <- function(x) {
+  x %>%
+    na.omit() %>% # Remove NA values if needed
+    table() %>%
+    which.max() %>%
+    names()
+}
+```
+
+
+```{r}
+blues <- colorRampPalette(brewer.pal(9, "Blues"))
+reds <- colorRampPalette(brewer.pal(9, "Reds"))
+
+zh_class_colors <- c(
+    'Radial glia'='#8966A9', 
+    'Neuronal IPC'='#598DC7', 
+    Neuroblast='#3EA9CE', 
+    Neuron='#3EB6B7', 
+    Glioblast='#7DBD65', 
+    Oligo='#BEC326', 
+    Placodes='#EBC92E', 
+    Immune='#F7B82E', 
+    Vascular='#F59C2A', 
+    Erythrocyte='#EE7426', 
+    'Neural crest'='#E6532B', 
+    Fibroblast='#DC3838'
+)
+
+zh_region_colors <- c(
+    Forebrain='#A6CEE3', 
+    Telencephalon='#5EA0C9', 
+    Cortex='#287EB1', 
+    Subcortex='#77B59A', 
+    Striatum='#A1D67D', 
+    Hippocampus='#5DB54B', 
+    Diencephalon='#5B9E41', 
+    Hypothalamus='#C59B7B', 
+    Thalamus='#F47777', 
+    Midbrain='#E73335', 
+    "Midbrain dorsal"='#EB5037', "Midbrain ventral"='#F9A863', 
+    Hindbrain='#FDA542', 
+    Cerebellum='#FE8307', Pons='#E69663', Medulla='#CAB2D6',
+    'non-neural'='grey'
+)
+
+broad_region_colors <- c(
+  Cerebrum='#5EA0C9', 
+  Cerebellum='#5DB54B', 
+  Brainstem='#EB5037'
+)
+
+midline_colors <- c(
+  Midline='#FDA542', 
+  `Non-midline`='#5EA0C9'
+)
+
+region_colors_devmouse <- c(
+    "Head" = "#424242",
+    "Brain" = "#bdbdbd",
+    "Forebrain" = "#ab1673",
+    "Telencephalon" = "#7b1fa2",
+    "Cortex" = "#b44a6e",
+    "Hippocampus" = "#F69B97",
+    "Striatum" = "#9575cd",
+    "Subcortex" = "#ce93d8",
+    "Hypothalamus" = "#8EC7EC",
+    "Diencephalon" = "#29b6f6",
+    "Thalamus" = "#29D5F6",
+    "Midbrain" = "#00897b",
+    "Midbrain ventral" = "#26a69a",
+    "Midbrain dorsal" = "#1B8466",
+    "Pons" = "#C6B161",
+    "Cerebellum" = "#95CB6E",
+    "Medulla" = "#f9a825",
+    "Hindbrain" = "#95CB6E"
+)
+```
+
+```{r}
+meta_dir <- "/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO/Timecourse/data/03_HDBCA_mapping/data/"
+
+po_meta <- read_tsv(file.path(meta_dir, "bro_meta_noMC_midlate.tsv.gz")) %>%
+  rename('...1'="cell")
+oa_meta <- read_tsv(file.path(meta_dir, "hnoca_meta.tsv.gz")) %>%
+  rename('...1'="cell")
+braun_meta <- read_tsv(file.path(meta_dir, "bro_braun_meta_noMC_midlate.tsv.gz"))  
+```
+
+```{r}
+unspec_regions <- c('Brain', 'Head', 'Forebrain', 'Head', 'Hindbrain', 'Telencephalon')
+```
+
+```{r}
+plot_df <- braun_meta %>% sample_n(1000000)
+```
+
+```{r, fig.height=5, fig.width=5}
+ggplot(plot_df, aes(Embedding_1, Embedding_2, color=CellClass)) +
+    geom_point(size=0.0001, shape=16, alpha=0.05) +
+    scale_color_manual(values = zh_class_colors) +
+    guides(color=guide_legend(override.aes = list(size=1, alpha=1))) + 
+    theme_void() + coord_fixed() + no_legend() +
+    ggtitle('HDBCA annotation')
+
+ggplot(plot_df, aes(Embedding_1, Embedding_2, color=Region)) +
+    geom_point(size=0.0001, shape=16, alpha=0.05) +
+    scale_color_manual(values = zh_region_colors) +
+    guides(color=guide_legend(override.aes = list(size=1, alpha=1))) + 
+    theme_void() + coord_fixed() + no_legend() + 
+    ggtitle('HDBCA region')
+
+ggplot(plot_df, aes(Embedding_1, Embedding_2, color=CellClass)) +
+    geom_point(size=0.0001, shape=16, alpha=0.05) +
+    scale_color_manual(values = zh_class_colors) +
+    guides(color=guide_legend(override.aes = list(size=1, alpha=1))) + 
+    theme_void() + coord_fixed() +
+    ggtitle('HDBCA annotation') +
+    theme(
+    plot.background = element_rect(fill = "transparent", color = NA),   # Transparent plot background
+    panel.background = element_rect(fill = "transparent", color = NA),  # Transparent panel background
+    legend.background = element_rect(fill = "transparent", color = NA), # Transparent legend background
+    legend.key = element_rect(fill = "transparent", color = NA)         # Transparent legend keys
+  )
+
+ggplot(plot_df, aes(Embedding_1, Embedding_2, color=Region)) +
+    geom_point(size=0.0001, shape=16, alpha=0.05) +
+    scale_color_manual(values = zh_region_colors) +
+    guides(color=guide_legend(override.aes = list(size=1, alpha=1))) + 
+    theme_void() + coord_fixed() + 
+    ggtitle('HDBCA region')
+```
+
+
+```{r, fig.height=5, fig.width=5}
+ggplot(plot_df, aes(Embedding_1, Embedding_2, color=log_num_wknn_scanvi_q2r_ds_max)) +
+    geom_point(size=0.0001, shape=16, alpha=0.05) +
+    scale_color_viridis_c(option = 'D') +
+    #scale_color_gradientn(colors=c('whitesmoke', reds(100)[10:100]), limits=c(0,1)) +
+    theme_void() + coord_fixed() + no_legend() +
+    ggtitle('PO presence max in HDBCA')
+
+ggplot(plot_df, aes(Embedding_1, Embedding_2, color=oa_log_num_wknn_scanvi_q2r_ds_max)) +
+    geom_point(size=0.0001, shape=16, alpha=0.05) +
+    scale_color_gradientn(colors=c('whitesmoke', reds(100)[10:100]), limits=c(0,1)) +
+    theme_void() + coord_fixed() + no_legend() +
+    ggtitle('OA max coverage score')
+```
+
+```{r, fig.height=5, fig.width=5}
+ggplot(plot_df, aes(Embedding_1, Embedding_2, color=BRO_cov_gains)) +
+    geom_point(size=0.001, shape=16, alpha=0.05) +
+    scale_color_gradientn(colors=c('whitesmoke', reds(100)[10:100]), limits=c(0,1)) +
+    theme_void() + coord_fixed() + no_legend() +
+    ggtitle('BRO coverage gains over organoid atlas')
+```
+
+```{r}
+plot_df <- braun_meta %>% 
+    group_by(cluster_id) %>% 
+    mutate(
+        mean_gains=mean(BRO_cov_gains),
+        gained_cluster=ifelse(mean_gains>0.2, as.character(cluster_id), NA)
+    ) %>% 
+    ungroup() %>% sample_n(1000000)
+```
+
+
+```{r, fig.height=5, fig.width=5}
+plot_df$gained_cluster[plot_df$gained_cluster=='none'] <- NA
+ggplot(arrange(plot_df, !is.na(gained_cluster)), aes(Embedding_1, Embedding_2, color=gained_cluster, size=!is.na(gained_cluster))) +
+    ggrastr::rasterise(geom_point(shape=16), dpi=150) +
+    theme_void() + no_legend() +
+    scale_size_manual(values=c(0.01, 0.2)) +
+    scale_color_manual(values=reds(100)[seq(10,100, length.out=length(unique(plot_df$gained_cluster))-1)], na.value='whitesmoke') + coord_fixed() +
+    ggtitle('BRO gained clusters over organoid atlas')
+ggsave('/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO/Timecourse/figures/04_abundance_analysis/gained_coverage_clusters_umap.pdf', height=4, width=4, dpi = 300)
+```
+
+```{r, fig.height=5, fig.width=5}
+ggplot(arrange(plot_df, !is.na(gained_cluster)), aes(Embedding_1, Embedding_2)) +
+    # Outline layer (add a layer for outlines first)
+    geom_point(aes(size=!is.na(gained_cluster)), shape=21, fill="black", color="black", stroke=0.31) +
+    # Rasterized colored points layer
+    ggrastr::rasterise(geom_point(aes(color=gained_cluster, size=!is.na(gained_cluster)), shape=16), dpi=150) +
+    theme_void() + no_legend() +
+    scale_size_manual(values=c(0.01, 0.2)) +
+    scale_color_manual(values=reds(100)[seq(10,100, length.out=length(unique(plot_df$gained_cluster))-1)], na.value='whitesmoke') +
+    coord_fixed() +
+    ggtitle('BRO gained clusters over organoid atlas')
+```
+
+
+```{r, fig.height=5, fig.width=5}
+ggplot(arrange(plot_df, !is.na(gained_cluster)), aes(Embedding_1, Embedding_2, color=!is.na(gained_cluster))) +
+    geom_point(size=0.01, shape=16) +
+    scale_color_manual(values=c('whitesmoke', reds(100)[50])) +
+    theme_void() + no_legend() + coord_fixed()
+```
+
+```{r}
+remove_regions <- c('Brain', 'Head', 'Forebrain', 'Head', 'Hindbrain', 'Telencephalon','Midbrain ventral','Midbrain dorsal')
+brainstem <-c('Midbrain','Pons','Medulla')
+midline <- c(brainstem, 'Thalamus')
+
+gains_meta <- braun_meta %>%
+    filter(!Subregion %in% remove_regions, !Region %in% c('Forebrain')) %>%
+    group_by(cluster_id) %>%
+    mutate(
+      consensus_region=get_mode(Region),
+      consensus_subregion=get_mode(Subregion)
+      ,) %>%
+    summarise(
+        mean_gains=mean(BRO_cov_gains), 
+        sd_gain=sd(BRO_cov_gains),
+        consensus_region=consensus_region[1], 
+        consensus_subregion=consensus_subregion[1],
+        CellClass_Mossi = CellClass_Mossi[1]
+    ) %>% 
+    arrange(desc(mean_gains)) %>% 
+    mutate(
+        cluster_id=factor(cluster_id, levels=unique(.$cluster_id)),
+        consensus_region=factor(consensus_region, levels=names(region_colors_devmouse)),
+        annot=factor(CellClass_Mossi, levels=unique(.$CellClass_Mossi))
+    ) %>%
+  mutate(
+    broad_region=ifelse(consensus_region %in% brainstem,yes='Brainstem',no=
+                          ifelse(consensus_region == 'Cerebellum', yes='Cerebellum', no='Cerebrum')),
+    midline=ifelse(consensus_region %in% midline, yes = 'Midline',no = 'Non-midline'),
+    brainstem=ifelse(consensus_region %in% brainstem,yes='Brainstem',no="Non-brainstem")
+  )
+```
+
+```{r, fig.height=4, fig.width=8}
+plot_df <- gains_meta
+ggplot(plot_df, aes(cluster_id, mean_gains, fill=midline)) +
+    geom_errorbar(aes(ymin=mean_gains-sd_gain, ymax=mean_gains+sd_gain), color='lightgrey', linewidth=0.1) +
+    geom_point(shape=21, stroke=0.05, color='white', size=0.8) +
+    geom_hline(yintercept=0.3, linewidth=0.3, color='darkgrey') +
+    geom_hline(yintercept=0.2, linewidth=0.3, color='red') +
+    geom_hline(yintercept=0.1, linewidth=0.3, color='blue') +
+    scale_fill_manual(values=midline_colors) +
+    theme_void() +
+    scale_y_continuous(limits=c(NA,1)) +
+    scale_x_discrete(expand=c(0,10)) +
+    no_x_text() +
+    
+    labs(y='Gained coverage\n(in Pasca over organoid atlas)', x='Clusters')
+```
+
+```{r}
+plot_df$CellClass_Mossi[plot_df$CellClass_Mossi == "Failed"] <- "COP"
+```
+
+
+```{r, fig.height=4, fig.width=8, dpi=600}
+top5_df <- plot_df %>%
+  filter(mean_gains > 0.2) %>% 
+  group_by(consensus_region) %>%
+  top_n(2, mean_gains)
+
+
+ggplot(plot_df, aes(cluster_id, mean_gains, fill=consensus_region)) +
+    geom_errorbar(aes(ymin=mean_gains-sd_gain, ymax=mean_gains+sd_gain), color='snow3', linewidth=0.1) +
+    geom_point(shape=21, stroke=0.05, color='white', size=2) +
+    geom_hline(yintercept=0.2, linewidth=0.5, color='lightgrey') +
+    scale_y_continuous(limits=c(NA,1)) +
+    scale_x_discrete(expand=c(0,10)) +
+    scale_fill_manual(values=zh_region_colors) +
+    facet_grid(~consensus_region, space='free', scales='free_x') + 
+    theme(
+        panel.spacing.x = unit(0, 'line'),
+        panel.background = element_rect(fill = "transparent", color = NA),  # Transparent panel
+        plot.background = element_rect(fill = "transparent", color = NA),   # Transparent plot
+        legend.background = element_rect(fill = "transparent", color = NA)  # Transparent legend
+    ) +  
+    labs(y='Gained coverage\n(in BRO over organoid atlas)', x='HDBCA clusters') + 
+    theme_classic() + no_x_text() + no_legend() + 
+    geom_text_repel(data=top5_df, 
+                    aes(label=CellClass_Mossi), 
+                    size=2,
+                    max.overlaps = Inf,
+                    box.padding = 1,
+                    min.segment.length = 0,
+                    segment.color = 'darkgrey',
+                    seed = 420)
+ggsave('/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO/Timecourse/figures/04_abundance_analysis/gained_coverage_clusters.pdf', height=4, width=8, dpi = 300)
+```
+
+```{r}
+plot_df$annot <- NULL
+xlsx::write.xlsx(plot_df, file = file.path(meta_dir, "bro_gained_coverage_clusters.xlsx"))
+```
+
+
+```{r, fig.height=4, fig.width=8}
+top5_df <- plot_df %>%
+  filter(mean_gains > 0.2) %>% 
+  group_by(broad_region) %>%
+  top_n(5, mean_gains)
+
+ggplot(plot_df, aes(cluster_id, mean_gains, fill=broad_region)) +
+    geom_errorbar(aes(ymin=mean_gains-sd_gain, ymax=mean_gains+sd_gain), color='snow3', linewidth=0.1) +
+    geom_point(shape=21, stroke=0.05, color='white', size=2) +
+    geom_hline(yintercept=0.2, linewidth=0.5, color='lightgrey') +
+    scale_y_continuous(limits=c(NA,1)) +
+    scale_x_discrete(expand=c(0,10)) +
+    scale_fill_manual(values=broad_region_colors) +
+    facet_grid(~broad_region, space='free', scales='free_x') + 
+    theme(
+        panel.spacing.x = unit(0, 'line')) +  
+    geom_text_repel(data=top5_df, 
+                    aes(label=cluster_id), 
+                    size=5,
+                    max.overlaps = Inf,
+                    box.padding = 1,
+                    min.segment.length = 0,
+                    segment.color = 'darkgrey',
+                    seed = 420) +
+    labs(y='Gained coverage\n(in BRO over organoid atlas)', x='HDBCA clusters') + 
+    theme_classic() + no_x_text() + no_legend()
+```
+
+
+```{r, fig.height=4, fig.width=8}
+top5_df <- plot_df %>%
+  filter(mean_gains > 0.2) %>% 
+  group_by(midline) %>%
+  top_n(5, mean_gains)
+
+ggplot(plot_df, aes(cluster_id, mean_gains, fill=midline)) +
+    geom_errorbar(aes(ymin=mean_gains-sd_gain, ymax=mean_gains+sd_gain), color='snow3', linewidth=0.1) +
+    geom_point(shape=21, stroke=0.05, color='white', size=2) +
+    geom_hline(yintercept=0.2, linewidth=0.5, color='lightgrey') +
+    scale_y_continuous(limits=c(NA,1)) +
+    scale_x_discrete(expand=c(0,10)) +
+    scale_fill_manual(values=midline_colors) +
+    facet_grid(~midline, space='free', scales='free_x') + 
+    theme(
+        panel.spacing.x = unit(0, 'line')) +  
+    geom_text_repel(data=top5_df, 
+                    aes(label=cluster_id), 
+                    size=5,
+                    max.overlaps = Inf,
+                    box.padding = 1,
+                    min.segment.length = 0,
+                    segment.color = 'darkgrey',
+                    seed = 420) +
+    labs(y='Gained coverage\n(in BRO over organoid atlas)', x='HDBCA clusters') + 
+    theme_classic() + no_x_text() + no_legend()
+```
+
+
+```{r, fig.height=5, fig.width=5}
+midline_cluster = gains_meta$cluster_id[gains_meta$midline=='Midline' & gains_meta$mean_gains >0.2]
+non_midline_cluster = gains_meta$cluster_id[gains_meta$midline=='Non-midline' & gains_meta$mean_gains >0.2]
+
+plot_df <- braun_meta %>% 
+    group_by(cluster_id) %>% 
+    mutate(
+        mean_gains=mean(BRO_cov_gains),
+        gained_cluster=ifelse(mean_gains>0.2, as.character(cluster_id), 'none'),
+        midline_cluster=ifelse(gained_cluster %in% midline_cluster, as.character(cluster_id), NA),
+        non_midline_cluster=ifelse(gained_cluster %in% non_midline_cluster, as.character(cluster_id), NA)
+    ) %>% 
+    ungroup()
+
+centroids <- plot_df %>%
+  filter(!is.na(midline_cluster)) %>%  # Remove NA values
+  group_by(midline_cluster) %>%
+  summarise(
+    Embedding_1 = mean(Embedding_1),
+    Embedding_2 = mean(Embedding_2)
+  )
+
+ggplot(arrange(plot_df, !is.na(midline_cluster)), aes(Embedding_1, Embedding_2, color=midline_cluster, size=!is.na(midline_cluster))) +
+    geom_point(shape=16, size=0.001, alpha=0.05) +
+    theme_void() + no_legend() +
+    scale_size_manual(values=c(0.01, 0.2)) +
+    scale_color_manual(values=reds(100)[seq(30,100, length.out=length(midline_cluster))], na.value='whitesmoke') + coord_fixed() +
+    geom_text_repel(data=centroids, aes(label=midline_cluster), size=4, color="black", box.padding = 0.5, max.overlaps = Inf) + # Adjust box padding to control spacing
+    ggtitle('Gained midline clusters over organoid atlas')
+
+centroids <- plot_df %>%
+  filter(!is.na(non_midline_cluster)) %>%  # Remove NA values
+  group_by(non_midline_cluster) %>%
+  summarise(
+    Embedding_1 = mean(Embedding_1),
+    Embedding_2 = mean(Embedding_2)
+  )
+
+ggplot(arrange(plot_df, !is.na(non_midline_cluster)), aes(Embedding_1, Embedding_2, color=non_midline_cluster, size=!is.na(non_midline_cluster))) +
+    geom_point(shape=16, size=0.001, alpha=0.05) +
+    theme_void() + no_legend() +
+    scale_size_manual(values=c(0.01, 0.2)) +
+    scale_color_manual(values=reds(100)[seq(30,100, length.out=length(non_midline_cluster))], na.value='whitesmoke') + coord_fixed() +
+    geom_text_repel(data=centroids, aes(label=non_midline_cluster), size=4, color="black", box.padding = 0.5, max.overlaps = Inf) + # Adjust box padding to control spacing
+    ggtitle('Gained non-midline clusters over organoid atlas') 
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

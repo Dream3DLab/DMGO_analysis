@@ -1,0 +1,12 @@
+param	value	description
+runID	BRO_t1	String, name of the run analysis
+rds_dir	/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO_t1-t2/T1_2/scVI/seurat_scVI_regressed.top2000.rds	string, name of directory of the cellranger run to use.
+species	h_sapiens	string, allowed values are either ""h_sapiens"" or ""m_musculus"", name of species used to identify mitochrondrial and ribosomal genes
+normalization	LogNormalize	string, allowed values are ""LogNormalize"" or ""SCTransform"", indicates which method of normalization will be used as input for downstream analysis and saved as the default assay in the Seurat object
+var_regress	nCount_RNA,percent.mito,percent.ribo	string, separate multiple values with a comma, variables to regress from gene expression (each value must match a column name in meta.data slot)
+cc_regress	FALSE	logical, regressing out cc effects or not
+umap_pcs	12	numeric, number of PCs to compute the UMAP
+pcs_keep	30	numeric, number of PCs to use for downstream steps
+clustering_resolution	1	numeric, resolution for which the clustering solution will be saved as default in the Seurat object, used for computing per-cluster QC metrics, and used for cluster marker calling 
+clustering_range	3	numeric, what is the highest res to be tested
+seed	420	numeric, random seed, set for reproducibility of results

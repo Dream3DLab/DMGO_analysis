@@ -1,0 +1,183 @@
+---
+title: "06_voxhunt"
+author: "riri"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r}
+library(Seurat)
+library(voxhunt)
+library(tidyverse)
+library(readr)
+library(Matrix)
+library(SCpubr)
+library(patchwork)
+library(SeuratDisk)
+```
+
+```{r}
+file_path = "/Users/rijndertariese/Library/Group Containers/G69SCX94XU.duck/Library/Application Support/duck/Volumes.noindex/hpc_remote_2.localized/pmc_rios/2.personal/rariese/scseq_analysis/BRO/time_course/data/BRO_timecourse/data_R/"
+
+fig_dir <- "/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO/Timecourse/figures/voxhunt/"
+```
+
+```{r}
+counts <- read_csv('/Users/rijndertariese/Library/Application Support/Mountain Duck/Volumes.noindex/hpc_remote_2.localized/pmc_rios/2.personal/rariese/scseq_analysis/BRO/time_course/data/BRO_timecourse/data_R/counts.csv')
+data <- read_csv('/Users/rijndertariese/Library/Application Support/Mountain Duck/Volumes.noindex/hpc_remote_2.localized/pmc_rios/2.personal/rariese/scseq_analysis/BRO/time_course/data/BRO_timecourse/data_R/scran_normalization.csv')
+cell_meta <- read_csv('/Users/rijndertariese/Library/Application Support/Mountain Duck/Volumes.noindex/hpc_remote_2.localized/pmc_rios/2.personal/rariese/scseq_analysis/BRO/time_course/data/BRO_timecourse/data_R/cellMeta.csv')
+gene_meta <- read_csv('/Users/rijndertariese/Library/Application Support/Mountain Duck/Volumes.noindex/hpc_remote_2.localized/pmc_rios/2.personal/rariese/scseq_analysis/BRO/time_course/data/BRO_timecourse/data_R/geneMeta.csv')
+```
+
+```{r}
+rownames(counts) <- cell_meta$Barcode
+colnames(counts) <- gene_meta$GeneName
+
+rownames(data) <- cell_meta$Barcode
+colnames(data) <- gene_meta$GeneName
+```
+
+```{r}
+seurat <- CreateSeuratObject(counts = t(counts), data = t(data))
+
+seurat@meta.data<-cbind(cell_meta,seurat@meta.data)
+rownames(seurat@meta.data)<-colnames(seurat)
+
+umap <- seurat@meta.data[,c("UMAP1","UMAP2")]
+colnames(umap) <- c("UMAP_1","UMAP_2")
+rownames(umap) <- rownames(seurat@meta.data)
+seurat@reductions$umap <- CreateDimReducObject(embeddings = as.matrix(umap), assay = "RNA", key = "UMAP_")
+```
+
+```{r}
+DimPlot(seurat, group.by = "Day")
+```
+
+```{r}
+load_aba_data('/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Refs/Voxhunt_data')
+```
+
+```{r}
+regional_markers <- structure_markers('E18', annotation_level = "custom_1") %>%
+    group_by(group) %>%
+    top_n(5, auc) %>% 
+    {unique(.$gene)}
+head(regional_markers)
+```
+
+```{r}
+seurat[,seurat$Day %in% c("020","030","060","090","120")]
+```
+
+
+```{r}
+vox_map <- voxel_map(
+    seurat[,seurat$Day %in% c("120")], 
+    genes_use = regional_markers,
+    pseudobulk_groups = FALSE,
+    stage="E18", 
+    allow_neg=FALSE)
+
+print(vox_map)
+```
+
+```{r, fig.height=5, fig.width=10}
+pdf(file.path(fig_dir, paste0('BRO_RA1_exp023_voxhunt_similarity_heatmap.pdf')))
+plot_structure_similarity(vox_map, cluster=F, annotation_level = 'custom_2', scale = T)
+dev.off()
+```
+
+
+```{r}
+plot_structure_similarity(vox_map, cluster=F, annotation_level = 'custom_2', scale = T)
+```
+
+```{r}
+regional_markers <- structure_markers('E18') %>%
+    group_by(group) %>%
+    top_n(10, auc) %>% 
+    {unique(.$gene)}
+head(regional_markers)
+```
+
+```{r}
+vox_map <- voxel_map(
+    seurat, 
+    genes_use = regional_markers,
+    stage = 'E18', 
+)
+print(vox_map)
+```
+
+```{r}
+plot_map(vox_map)
+```
+
+```{r}
+
+seurat <- SetIdent(seurat, value = "Day")
+
+map_colors <- grDevices::colorRampPalette(c('#e5e7e9', RColorBrewer::brewer.pal(n=9, name="OrRd")),bias = 0.5)
+
+Etimes<- c("E13","E18")
+
+cond <- NULL
+p01 <- list()
+p02 <- list()
+for (e in Etimes){
+  print(e)
+
+  struct_markers <- structure_markers(e, 'custom_1')
+  genes_use <- struct_markers%>%
+    group_by(group) %>%
+    top_n(5, auc) %>%
+    pull(gene) %>% unique()
+
+  for (day in unique(seurat$Day)) {
+    print(day)
+    
+    seurat_day <- subset(seurat, idents = day)
+
+    ps_map <- voxel_map(seurat_day, stage=e, genes_use = genes_use, pseudobulk_groups = FALSE)
+
+    p01[[paste0(e, day)]] <- plot_map(ps_map, ncol=1, nrow = 1) +
+      coord_fixed() +
+      ggtitle(paste0(e, '_', day, '_corrected')) +
+      scale_fill_gradientn(colours = map_colors(100), limits = c(0,1))
+
+    p02[[paste0(e, day)]] <- plot_map(ps_map, ncol=1, nrow = 1, map_colors = map_colors(100)) +
+        coord_fixed() +
+        ggtitle(paste0(e, '_', day, '_non-corrected'))
+
+  }
+}
+```
+
+
+```{r}
+p02
+```
+
+```{r}
+for( i in names(p01)) {
+  print(i)
+  pdf(file.path(fig_dir, paste0('BRO_RA1_exp023_voxhunt_',i,'_spatialmaps_level1_corrected.pdf')))
+  print(p01[i])
+  dev.off()
+}
+```
+
+```{r}
+for( i in names(p02)) {
+  print(i)
+  pdf(file.path(fig_dir, paste0('BRO_RA1_exp023_voxhunt_',i,'_spatialmaps_level1_noncorrected.pdf')))
+  print(p02[i])
+  dev.off()
+}
+```
+
+
+
+
