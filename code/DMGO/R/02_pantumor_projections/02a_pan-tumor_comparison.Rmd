@@ -6,19 +6,34 @@ output: html_document
 editor_options:
     chunk_output_type: inline
 params:
-  title: NULL
-  wd: NULL
-  assets: NULL
+  title: "pan-tumor correlation"
+  wd: '/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO_t1/projections/Pan_tumor'
+  assets: '/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO_t1/projections/Pan_tumor/assets'
 ---
 
 ```{r load_libraries, cache = FALSE, message = FALSE, warning = FALSE}
+library(here)
 library(dplyr)
+library(tidyr)
 library(readr)
+library(data.table)
+library(glue)
+library(DT)
+library(stringr)
+library(kableExtra)
 library(RColorBrewer)
 library(ggplot2)
+library(cowplot)
 library(Seurat)
+library(scCustomize)
+library(harmony)
 library(dittoSeq)
+library(clustree)
+library(purrr)
+library(openxlsx)
 library(SCpubr)
+library(readxl)
+library(tidyverse)
 
 # custom functions
 setwd(params$wd)
@@ -32,7 +47,7 @@ knitr::opts_chunk$set(
   # Keep all the figures produced in a chunk
   fig.keep = "all",      
   # Save all figures to this output folder
-  fig.path = file.path(params$wd,'figures/'),
+  fig.path = file.path(params$wd,'revision_figures/'),
   # Do not cache results
   cache = FALSE)
 
@@ -59,26 +74,24 @@ refs
 
 ```{r create dirs}
 # specify and create output and figures folders with run prefix
-output_dir <- 'output'
+output_dir <- 'revision_output'
 dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 
-figures_dir <- 'figures'
+figures_dir <- 'revision_figures'
 dir.create(figures_dir, showWarnings = TRUE, recursive = TRUE)
 
 ```
 
 ```{r read in query and ref data}
-
 query <- readRDS(config$rds_dir)
 DefaultAssay(query) <- "RNA"
 
-query <- SetIdent(query, value = "tumor.plasmids.malignancy.25")
-query_malignant <- subset(query, idents = "Tumor")
+query_malignant <- query
 
 query_malignant <- query_malignant %>%
-  FindVariableFeatures() %>%
-  ScaleData(vars.to.regress = c("nCount_RNA","gender.score","percent.mt", "S.Score","G2M.Score"), 
-            features = rownames(query_malignant)) %>%
+  NormalizeData() %>% 
+  FindVariableFeatures() %>% 
+  ScaleData() %>%
   RunPCA()
 
 Filbin <- readRDS(file = refs$`Filbin et al. 2017`)
@@ -94,30 +107,52 @@ Gillen <- readRDS(file = refs$`Gillen et al. 2020`)
 Gillen$author <- "Gillen"
 Gillen$celltypes <- Gillen$cell_type
 Gillen$tumor <- Gillen$tumor_subtype
+Gillen <- Gillen[,Gillen$tumor %in% c("PFA1","PFA2")]
+Gillen <- Gillen[,!Gillen$celltypes %in% c("Doublets","Lymphocytes","Myeloid","Oligodendrocytes","RELA-sc1","RELA-sc2","RELA-sc4","YAP","mitotic","PFB","PFA-sc6","PFA-sc7")]
 
-ref <- merge(x = Filbin, y = c(Liu, Gillen),
-             add.cell.ids = c("Filbin","Liu","Gillen"), 
+Jessa <- readRDS('/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/DMG_Jessa2022NatGen/Jessa2022_pons.rds')
+Jessa$author <- "Jessa"
+Jessa$celltypes <- Jessa$Cell_type_consensus_Jessa2022
+Jessa <- Jessa[,Jessa$Malignant_normal_consensus_Jessa2022=="Malignant"]
+
+
+ref <- merge(x = Filbin, y = c(Liu, Gillen, Jessa),
+             add.cell.ids = c("Filbin","Liu","Gillen","Jessa"), 
              merge.data = F)
 
-query_malignant
-ref
+joint_genes <- intersect(rownames(query), rownames(ref))
+
+MT_genes <- grep("^MT-",rownames(ref), value = T)
+HLA_genes <- grep("^HLA-",rownames(ref), value = T)
+
+genes_remove <- c(MT_genes, HLA_genes, "XIST")
 ```
 
-```{r}
 
+```{r}
 reference <- subset(ref, subset = tumor %in% c('AC-like', 'MES-like', 
                                                           'OC-like', 'OPC', 'OPC-like-1', 
                                                          'OPC-like-2', 'OPC-like-3',
                                                         'Cellline', 'Malignant',
-                                                        'PDX', 'GBM','PFA1','PFA2'))
+                                                        'PDX', 'GBM','PFA1','PFA2','HGG-H3.1/2K27M-Pons','HGG-H3.3K27M-Pons'))
 unique(reference$tumor)
 ```
 
 
 ```{r}
-reference <- reference %>% NormalizeData() %>% 
-                FindVariableFeatures()%>%ScaleData()%>%
-                RunPCA()
+reference <- subset(reference, features = joint_genes)
+reference <- subset(reference, features = setdiff(rownames(reference), genes_remove))
+
+reference <- reference %>% 
+  NormalizeData() %>% ScaleData() %>% FindVariableFeatures(nfeatures = 3000)
+```
+
+
+```{r}
+hvg <- VariableFeatures(reference)
+
+reference <- subset(reference, features = hvg) %>%
+  ScaleData(vars.to.regress = c("nCount_RNA","author")) %>% RunPCA()
 ```
 
 ```{r}
@@ -126,6 +161,21 @@ reference <- reference %>%
     FindNeighbors(reduction = "pca", dims = 1:10) %>% 
     FindClusters(resolution = 0.5) %>% 
     identity()
+```
+
+```{r}
+reference$tumor <- recode(reference$tumor,
+                              'AC-like' = 'DMG',
+                              'MES-like' = 'DMG',
+                              'OC-like' = 'DMG',
+                              'OPC' = 'DMG',
+                              'OPC-like-1' = 'DMG',
+                              'OPC-like-2' = 'DMG',
+                              'OPC-like-3' = 'DMG',
+                              'Malignant' = 'DMG',
+                              'HGG-H3.1/2K27M-Pons'='DMG',
+                              'HGG-H3.3K27M-Pons'="DMG")
+unique(reference$tumor)
 ```
 
 ```{r ref_dimplot, fig.height=5, fig.width=10}
@@ -138,18 +188,14 @@ dittoSeq::dittoDimPlot(reference,
              do.label = T, labels.size = 3, size = 1)
 ```
 
+
 ```{r}
-reference$tumor <- recode(reference$tumor,
-                              'AC-like' = 'DMG',
-                              'MES-like' = 'DMG',
-                              'OC-like' = 'DMG',
-                              'OPC' = 'DMG',
-                              'OPC-like-1' = 'DMG',
-                              'OPC-like-2' = 'DMG',
-                              'OPC-like-3' = 'DMG',
-                              'Malignant' = 'DMG')
-unique(reference$tumor)
+query_malignant <- subset(query_malignant, features = hvg)
+
+query_malignant <- query_malignant %>%
+  NormalizeData()%>%ScaleData(vars.to.regress = c("nCount_RNA","Day")) %>% RunPCA()
 ```
+
 
 ```{r}
 anchors <- FindTransferAnchors(
@@ -190,41 +236,26 @@ check <- MappingScore(anchors = anchors, ndim = 50)
 ```{r dimplot, fig.height=5, fig.width=10}
 dittoDimPlot(query_malignant, 
              reduction.use = "ref.umap", var = "predicted.type", 
-             do.label = T, labels.size = 3, size = 0.5)
-
-dittoDimPlot(query_malignant, 
-             reduction.use = "umap", var = "predicted.type", 
-             do.label = T, labels.size = 3, size = 0.5)
+             do.label = T, labels.size = 3, size = 0.5) + coord_fixed()
 ```
 
-```{r comparison_heatmap, fig.height=5, fig.width=10}
-query_malignant <- SetIdent(query_malignant, value = "predicted.id.Liu")
 
-colors <- structure(c('#E69F00','#56B4E9', '#009E73', '#F0E442'),
-                   names = names(table(query_malignant@active.ident)))
-colors
+```{r comparison_heatmap, fig.height=7, fig.width=7}
+query_malignant$final_tumor_annot <- recode(query_malignant$final_tumor_annot,
+                                            "OC-like"="OPC-like-1")
 
-reds <- brewer.pal(10, name = "Reds")
-
-dittoHeatmap(query_malignant, 
-             assay = "prediction.score.type")
-
-DoHeatmap(query_malignant, 
-          features = c('DMG','Cellline','PDX', 'GBM',"PFA1","PFA2"), 
-          assay = 'prediction.score.type',
-          group.colors = colors,
-          angle = 90, size = 3,
-          slot = 'data',
-          raster = TRUE) +
-  scale_fill_gradient(low = "#FFFFFF", high = "#CB181D") +
-  ggtitle("Similarity comparison based on predicted.id.score")
+query_malignant <- SetIdent(query_malignant, value = "final_tumor_annot")
 
 do_ExpressionHeatmap(query_malignant, 
-                     features = c('DMG','Cellline','PDX', 'GBM',"PFA1","PFA2"),
+                     features = c('Cellline','PDX','DMG','GBM',"PFA1","PFA2"),
                      assay = "prediction.score.type",
                      flip = T,
-                     features.order = rev(c('DMG','Cellline','PDX', 'GBM',"PFA1","PFA2"))) +
+                     features.order = rev(c('Cellline','PDX','DMG','GBM',"PFA1","PFA2"))) +
     scale_fill_gradient(low = "#FFFFFF", high = "#CB181D")
-  
+ggsave('/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO/Tumor/figures/pan_tumor_reference/heatmap_pan_tumor.pdf', dpi = 300)
 
 ```
+
+
+
+
