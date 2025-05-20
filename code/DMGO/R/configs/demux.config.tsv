@@ -1,0 +1,5 @@
+param	value	description
+tenX_dir	/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO_t1-t2/T1_2/assets/t1_1_c_sample_feature_bc_matrix	string, path to 10X CellRanger output
+pos.quantile	0.99	numeric, defines cutoff for Demux. Default 0.99
+seed_use	420	numeric, seed
+

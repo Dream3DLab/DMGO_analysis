@@ -1,0 +1,261 @@
+---
+title: "`r params$title`"
+author: "riri"
+date: "2023-09-19"
+output: html_document
+editor_options:
+    chunk_output_type: inline
+params:
+  title: "pan-tumor correlation"
+  wd: '/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO_t1/projections/Pan_tumor'
+  assets: '/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO_t1/projections/Pan_tumor/assets'
+---
+
+```{r load_libraries, cache = FALSE, message = FALSE, warning = FALSE}
+library(here)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(data.table)
+library(glue)
+library(DT)
+library(stringr)
+library(kableExtra)
+library(RColorBrewer)
+library(ggplot2)
+library(cowplot)
+library(Seurat)
+library(scCustomize)
+library(harmony)
+library(dittoSeq)
+library(clustree)
+library(purrr)
+library(openxlsx)
+library(SCpubr)
+library(readxl)
+library(tidyverse)
+
+# custom functions
+setwd(params$wd)
+```
+
+```{r setup}
+
+knitr::opts_chunk$set(
+  # Display PNG in HTML file, but also keep PDF outputs in figures folder
+  dev = c("png", "pdf"), 
+  # Keep all the figures produced in a chunk
+  fig.keep = "all",      
+  # Save all figures to this output folder
+  fig.path = file.path(params$wd,'revision_figures/'),
+  # Do not cache results
+  cache = FALSE)
+
+# don't use dingbats in PDFs, in order to create Illustrator-friendly figures
+grDevices::pdf.options(useDingbats = FALSE)
+
+```
+
+```{r read in config file}
+config <- read_delim(file.path(params$assets,'projections.config.tsv'), delim = '\t', escape_double = FALSE, trim_ws = TRUE)
+refs <- read_delim(file.path(params$assets,'references.tsv'), delim = '\t', escape_double = FALSE, trim_ws = TRUE)
+
+# coerce to a list of param:value pairs, and make sure numeric parameters are numeric type
+config <- as.list(tibble::deframe(config[, c(1, 2)]))
+refs <- as.list(tibble::deframe(refs[,c(1,2)]))
+
+# automatically convert each config element to the right type
+config <- lapply(config, type.convert, as.is = TRUE)
+refs <- lapply(refs, type.convert, as.is = TRUE)
+
+config
+refs
+```
+
+```{r create dirs}
+# specify and create output and figures folders with run prefix
+output_dir <- 'revision_output'
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+figures_dir <- 'revision_figures'
+dir.create(figures_dir, showWarnings = TRUE, recursive = TRUE)
+
+```
+
+```{r read in query and ref data}
+query <- readRDS(config$rds_dir)
+DefaultAssay(query) <- "RNA"
+
+query_malignant <- query
+
+query_malignant <- query_malignant %>%
+  NormalizeData() %>% 
+  FindVariableFeatures() %>% 
+  ScaleData() %>%
+  RunPCA()
+
+Filbin <- readRDS(file = refs$`Filbin et al. 2017`)
+Filbin$author <- "Filbin"
+Filbin$tumor <- Filbin$celltypes
+
+Liu <- readRDS(file = refs$`Liu et al. 2022`)
+Liu$author <- "Liu"
+Liu$celltypes <- Liu$annotation
+Liu$tumor <- Liu$annotation
+
+Gillen <- readRDS(file = refs$`Gillen et al. 2020`)
+Gillen$author <- "Gillen"
+Gillen$celltypes <- Gillen$cell_type
+Gillen$tumor <- Gillen$tumor_subtype
+Gillen <- Gillen[,Gillen$tumor %in% c("PFA1","PFA2")]
+Gillen <- Gillen[,!Gillen$celltypes %in% c("Doublets","Lymphocytes","Myeloid","Oligodendrocytes","RELA-sc1","RELA-sc2","RELA-sc4","YAP","mitotic","PFB","PFA-sc6","PFA-sc7")]
+
+Jessa <- readRDS('/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/DMG_Jessa2022NatGen/Jessa2022_pons.rds')
+Jessa$author <- "Jessa"
+Jessa$celltypes <- Jessa$Cell_type_consensus_Jessa2022
+Jessa <- Jessa[,Jessa$Malignant_normal_consensus_Jessa2022=="Malignant"]
+
+
+ref <- merge(x = Filbin, y = c(Liu, Gillen, Jessa),
+             add.cell.ids = c("Filbin","Liu","Gillen","Jessa"), 
+             merge.data = F)
+
+joint_genes <- intersect(rownames(query), rownames(ref))
+
+MT_genes <- grep("^MT-",rownames(ref), value = T)
+HLA_genes <- grep("^HLA-",rownames(ref), value = T)
+
+genes_remove <- c(MT_genes, HLA_genes, "XIST")
+```
+
+
+```{r}
+reference <- subset(ref, subset = tumor %in% c('AC-like', 'MES-like', 
+                                                          'OC-like', 'OPC', 'OPC-like-1', 
+                                                         'OPC-like-2', 'OPC-like-3',
+                                                        'Cellline', 'Malignant',
+                                                        'PDX', 'GBM','PFA1','PFA2','HGG-H3.1/2K27M-Pons','HGG-H3.3K27M-Pons'))
+unique(reference$tumor)
+```
+
+
+```{r}
+reference <- subset(reference, features = joint_genes)
+reference <- subset(reference, features = setdiff(rownames(reference), genes_remove))
+
+reference <- reference %>% 
+  NormalizeData() %>% ScaleData() %>% FindVariableFeatures(nfeatures = 3000)
+```
+
+
+```{r}
+hvg <- VariableFeatures(reference)
+
+reference <- subset(reference, features = hvg) %>%
+  ScaleData(vars.to.regress = c("nCount_RNA","author")) %>% RunPCA()
+```
+
+```{r}
+reference <- reference %>% 
+    RunUMAP(reduction = "pca", dims = 1:10, return.model = TRUE) %>% 
+    FindNeighbors(reduction = "pca", dims = 1:10) %>% 
+    FindClusters(resolution = 0.5) %>% 
+    identity()
+```
+
+```{r}
+reference$tumor <- recode(reference$tumor,
+                              'AC-like' = 'DMG',
+                              'MES-like' = 'DMG',
+                              'OC-like' = 'DMG',
+                              'OPC' = 'DMG',
+                              'OPC-like-1' = 'DMG',
+                              'OPC-like-2' = 'DMG',
+                              'OPC-like-3' = 'DMG',
+                              'Malignant' = 'DMG',
+                              'HGG-H3.1/2K27M-Pons'='DMG',
+                              'HGG-H3.3K27M-Pons'="DMG")
+unique(reference$tumor)
+```
+
+```{r ref_dimplot, fig.height=5, fig.width=10}
+dittoDimPlot(reference, 
+             reduction.use = "umap", var = "author", 
+             do.label = T, labels.size = 3, size = 0.5)
+
+dittoSeq::dittoDimPlot(reference, 
+             reduction.use = "umap", var = "tumor", 
+             do.label = T, labels.size = 3, size = 1)
+```
+
+
+```{r}
+query_malignant <- subset(query_malignant, features = hvg)
+
+query_malignant <- query_malignant %>%
+  NormalizeData()%>%ScaleData(vars.to.regress = c("nCount_RNA","Day")) %>% RunPCA()
+```
+
+
+```{r}
+anchors <- FindTransferAnchors(
+  reference = reference,
+  query = query_malignant,
+  normalization.method = "LogNormalize",
+  reference.reduction = "pca",
+  dims = 1:50
+)
+
+query_malignant <- TransferData(
+  anchorset = anchors, 
+  reference = reference,
+  query = query_malignant,
+  refdata = list(
+      type = 'tumor'),
+  prediction.assay = TRUE
+)
+
+query_malignant <- IntegrateEmbeddings(
+  anchorset = anchors,
+  reference = reference,
+  query = query_malignant, 
+  new.reduction.name = "ref.pca"
+)
+
+query_malignant <- ProjectUMAP(
+  query = query_malignant, 
+  query.reduction = "ref.pca", 
+  reference = reference, 
+  reference.reduction = "pca", 
+  reduction.model = "umap"
+)
+
+check <- MappingScore(anchors = anchors, ndim = 50)
+```
+
+```{r dimplot, fig.height=5, fig.width=10}
+dittoDimPlot(query_malignant, 
+             reduction.use = "ref.umap", var = "predicted.type", 
+             do.label = T, labels.size = 3, size = 0.5) + coord_fixed()
+```
+
+
+```{r comparison_heatmap, fig.height=7, fig.width=7}
+query_malignant$final_tumor_annot <- recode(query_malignant$final_tumor_annot,
+                                            "OC-like"="OPC-like-1")
+
+query_malignant <- SetIdent(query_malignant, value = "final_tumor_annot")
+
+do_ExpressionHeatmap(query_malignant, 
+                     features = c('Cellline','PDX','DMG','GBM',"PFA1","PFA2"),
+                     assay = "prediction.score.type",
+                     flip = T,
+                     features.order = rev(c('Cellline','PDX','DMG','GBM',"PFA1","PFA2"))) +
+    scale_fill_gradient(low = "#FFFFFF", high = "#CB181D")
+ggsave('/Users/rijndertariese/Library/CloudStorage/OneDrive-PrinsesMaximaCentrum/01. Research/13. Sequencing/Single cell/BRO/Tumor/figures/pan_tumor_reference/heatmap_pan_tumor.pdf', dpi = 300)
+
+```
+
+
+
+
