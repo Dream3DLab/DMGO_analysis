@@ -9,7 +9,7 @@ Repository accompanying the publication **De novo H3.3K27M-altered Diffuse Midli
 
 The repository is organized firstly per model and secondly per coding language
 
-* `BrO/`: Code. jupyter notebooks and Rmd files used for analyzing the time course sequencing data of the Brainstem Organoid, including annotation, reference mapping against the [HNOCA](https://doi.org/10.1038/s41586-024-08172-8) and the [HDBCA](DOI: 10.1126/science.adf1226)
+* `BrO/`: Code. jupyter notebooks and Rmd files used for analyzing the time course sequencing data of the Brainstem Organoid, including annotation, reference mapping against the [HNOCA](https://doi.org/10.1038/s41586-024-08172-8) and the [HDBCA](https://doi.org/10.1126/science.adf1226)
 * `DMGO/`: 
 
 * `Fig1_HNOCA_establishment/`
