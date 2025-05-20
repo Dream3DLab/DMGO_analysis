@@ -1,3 +1,5 @@
-# DMGO_analysis
+[![DOI](https://zenodo.org/badge/15356014.svg)](https://zenodo.org/badge/latestdoi/15356014)
 
-Code for the analysis of DMGO paper coming soon...
+# Transcriptomic profiling of BrO, DMGO and GD2 CAR T cells
+
+This repository accompanying the study
