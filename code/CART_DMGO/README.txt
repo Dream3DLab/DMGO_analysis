@@ -1,6 +1,14 @@
-## This readme explains the content of the code present here
+# README
 
-### There are three different codes:
+This document explains the purpose and content of the code files provided in this repository.
 
-- T_cells_n1 : First batch of CART cells co-cultured with DMGO
-- T_cells_n3: This includes 3 different experiments with CART exposed to DMGO, unexposed to DMGO and Ncam1 sorted CART
+## Overview of the Code Files
+
+- **T_Cells_n1**  
+  Contains analysis for the first batch of CAR-T cells co-cultured with DMGO.
+
+- **T_Cells_n3**  
+  Includes three separate experiments involving CAR-T cells:  
+  1. CAR-T cells exposed to DMGO  
+  2. CAR-T cells unexposed to DMGO  
+  3. NCAM1-sorted CAR-T cells
