@@ -12,3 +12,6 @@ This document explains the purpose and content of the code files provided in thi
   1. CAR-T cells exposed to DMGO  
   2. CAR-T cells unexposed to DMGO  
   3. NCAM1-sorted CAR-T cells
+
+## Overview of the Signature files
+Contains signatures that were used for figure generation. Explained in the code.
