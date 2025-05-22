@@ -20,7 +20,7 @@ library(readxl)
 library(dplyr)
 
 # Load pre-processed T cell Seurat object (cycling cells removed)
-seurat_T_cells_BRO <- readRDS(paste0(data_loc, "All_Tcells_Cycling_Removed.rds"))
+seurat_T_cells_BRO <- readRDS(paste0(data_loc, "T_cell_BRO_unprocessed_n1.rds"))
 
 # Load signature gene set (Serial killer cells from Supplementary Table 5)
 Supplementary_Table_5 <- read_excel(paste0(data_loc, "41587_2022_1397_MOESM7_ESM.xlsx"))
